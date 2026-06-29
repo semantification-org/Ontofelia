@@ -1,0 +1,83 @@
+{
+  "id": "persona-bob",
+  "agentId": "ontofelia",
+  "userId": "bob",
+  "turns": [
+    { "kind": "assert", "id": "b-t3", "text": "My favourite colour is blue.",
+      "fact": { "s": "Bob", "p": "favouriteColour", "o": "blue", "sType": "Person", "oType": "literal" }, "entities": ["Bob"] },
+
+    { "kind": "probe", "id": "b-p0", "category": "H0",
+      "query": "Just now in this conversation, what colour did I say is my favourite?",
+      "entities": ["Bob"],
+      "gold": { "type": "exact", "value": "blue" } },
+
+    { "kind": "assert", "id": "b-t1", "text": "My name is Bob.",
+      "fact": { "s": "User", "p": "name", "o": "Bob", "sType": "Person", "oType": "literal" }, "entities": ["bob"] },
+    { "kind": "assert", "id": "b-t2", "text": "I manage the Orion team.",
+      "fact": { "s": "Bob", "p": "manages", "o": "Orion", "sType": "Person", "oType": "Organization" }, "entities": ["Bob"] },
+    { "kind": "assert", "id": "b-t4", "text": "I report to Dana.",
+      "fact": { "s": "Bob", "p": "reportsTo", "o": "Dana", "sType": "Person", "oType": "Person" }, "entities": ["Bob"] },
+    { "kind": "assert", "id": "b-t5", "text": "My role is engineering manager.",
+      "fact": { "s": "Bob", "p": "hasRole", "o": "engineering manager", "sType": "Person", "oType": "literal" }, "entities": ["Bob"] },
+
+    { "kind": "assert", "id": "b-t2b", "text": "The Orion team uses Jira.",
+      "fact": { "s": "Orion", "p": "usesTool", "o": "Jira", "sType": "Organization", "oType": "Concept" }, "entities": ["Orion"] },
+    { "kind": "assert", "id": "b-t2c", "text": "The Orion team uses Slack.",
+      "fact": { "s": "Orion", "p": "usesTool", "o": "Slack", "sType": "Organization", "oType": "Concept" }, "entities": ["Orion"] },
+
+    { "kind": "pad", "count": 35 },
+
+    { "kind": "probe", "id": "b-p1", "category": "H1",
+      "query": "Which team do I manage?",
+      "paraphrases": ["What team am I responsible for?"],
+      "entities": ["Bob"],
+      "gold": { "type": "exact", "value": "Orion" } },
+
+    { "kind": "probe", "id": "b-p2mh", "category": "H2",
+      "query": "Which tools does the team I manage use?",
+      "paraphrases": ["What software does my team rely on?"],
+      "entities": ["Bob"],
+      "hops": ["manages", "usesTool"],
+      "gold": { "type": "set", "value": ["Jira", "Slack"],
+        "candidates": ["Jira", "Slack", "Trello", "Asana", "Teams", "Notion"] } },
+
+    { "kind": "probe", "id": "b-p4a", "category": "H4",
+      "query": "From which source message did you learn that I manage Orion, and when? Cite the message id and timestamp.",
+      "entities": ["Bob"],
+      "gold": { "type": "provenance", "value": "Orion", "sourceTurnId": "b-t2", "tsToleranceSec": 5 } },
+
+    { "kind": "probe", "id": "b-p4b", "category": "H4",
+      "query": "Where did the fact that I report to Dana come from? Give the source message id and time.",
+      "entities": ["Bob"],
+      "gold": { "type": "provenance", "value": "Dana", "sourceTurnId": "b-t4", "tsToleranceSec": 5 } },
+
+    { "kind": "mutate", "id": "b-t6", "text": "Actually my role is now director of engineering.",
+      "fact": { "s": "Bob", "p": "hasRole", "o": "director of engineering", "sType": "Person", "oType": "literal" }, "supersedes": "hasRole", "entities": ["Bob"] },
+    { "kind": "pad", "count": 15 },
+
+    { "kind": "probe", "id": "b-p3a", "category": "H3",
+      "query": "What is my current role?",
+      "entities": ["Bob"],
+      "gold": { "type": "value+flag", "value": "director", "expectConflictFlag": true } },
+
+    { "kind": "mutate", "id": "b-t7", "text": "Actually I report to Erin now, not Dana.",
+      "fact": { "s": "Bob", "p": "reportsTo", "o": "Erin", "sType": "Person", "oType": "Person" }, "supersedes": "reportsTo", "entities": ["Bob"] },
+    { "kind": "pad", "count": 15 },
+
+    { "kind": "probe", "id": "b-p3b", "category": "H3",
+      "query": "Who do I report to now?",
+      "entities": ["Bob"],
+      "gold": { "type": "value+flag", "value": "Erin", "expectConflictFlag": true } },
+
+    { "kind": "assert", "id": "b-t8", "text": "I am 17 years old.",
+      "fact": { "s": "Bob", "p": "hasAge", "o": "17", "sType": "Person", "oType": "literal" }, "entities": ["Bob"] },
+    { "kind": "assert", "id": "b-t9", "text": "I also said I am 42 years old.",
+      "fact": { "s": "Bob", "p": "hasAge", "o": "42", "sType": "Person", "oType": "literal" }, "entities": ["Bob"] },
+    { "kind": "pad", "count": 15 },
+
+    { "kind": "probe", "id": "b-p5a", "category": "H5",
+      "query": "I told you I am both 17 and 42 years old. A person has exactly one age. Is that consistent, or is there a violation?",
+      "entities": ["Bob"],
+      "gold": { "type": "constraint", "expectRejectOrFlag": true } }
+  ]
+}

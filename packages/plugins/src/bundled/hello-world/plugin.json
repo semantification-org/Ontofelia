@@ -1,0 +1,10 @@
+{
+  "name": "hello-world",
+  "version": "0.1.0",
+  "description": "A simple example plugin",
+  "author": "Ontofelia",
+  "type": ["command"],
+  "permissions": ["commands:register"],
+  "entryPoint": "index.js",
+  "trusted": true
+}

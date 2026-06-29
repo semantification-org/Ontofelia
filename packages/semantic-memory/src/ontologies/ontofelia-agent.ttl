@@ -1,0 +1,26 @@
+@prefix onto:  <urn:ontofelia:core#> .
+@prefix agent: <urn:ontofelia:agent#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+agent: rdf:type owl:Ontology ;
+    owl:imports onto: ;
+    owl:versionInfo "0.2.0" .
+
+agent:UserProfile rdfs:subClassOf onto:Person ;
+    rdf:type owl:Class ;
+    rdfs:label "User Profile" ;
+    rdfs:comment "Represents a user the agent interacts with" .
+
+agent:learnedFrom rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string ;
+    rdfs:label "learned from" ;
+    rdfs:comment "Channel where this was learned" .
+
+agent:importance rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Importance: critical, important, normal, trivial" .

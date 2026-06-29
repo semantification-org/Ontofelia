@@ -1,0 +1,13 @@
+{
+  "name": "explain",
+  "version": "0.1.0",
+  "description": "Explains concepts",
+  "commands": [
+    {
+      "name": "explain",
+      "description": "Explain the last concept",
+      "usage": "/skill explain [concept]"
+    }
+  ],
+  "tags": ["education"]
+}

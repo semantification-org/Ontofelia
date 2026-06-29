@@ -1,0 +1,13 @@
+{
+  "name": "translate",
+  "version": "0.1.0",
+  "description": "Translates texts",
+  "commands": [
+    {
+      "name": "translate",
+      "description": "Translate the last text",
+      "usage": "/skill translate <lang> [text]"
+    }
+  ],
+  "tags": ["text", "language"]
+}

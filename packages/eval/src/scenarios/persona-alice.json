@@ -1,0 +1,72 @@
+{
+  "id": "persona-alice",
+  "agentId": "ontofelia",
+  "userId": "alice",
+  "turns": [
+    { "kind": "assert", "id": "a-t1", "text": "My name is Alice.",
+      "fact": { "s": "User", "p": "name", "o": "Alice", "sType": "Person", "oType": "literal" }, "entities": ["alice"] },
+
+    { "kind": "probe", "id": "a-p0", "category": "H0",
+      "query": "I just told you my name a moment ago in this chat. What is my name?",
+      "entities": ["alice"],
+      "gold": { "type": "exact", "value": "Alice" } },
+
+    { "kind": "assert", "id": "a-t2", "text": "I work on the Helios project.",
+      "fact": { "s": "Alice", "p": "worksOn", "o": "Helios", "sType": "Person", "oType": "Concept" }, "entities": ["Alice"] },
+    { "kind": "assert", "id": "a-t3", "text": "I live in Munich.",
+      "fact": { "s": "User", "p": "livesIn", "o": "Munich", "sType": "Person", "oType": "Place" }, "entities": ["alice"] },
+    { "kind": "assert", "id": "a-t4", "text": "I speak German.",
+      "fact": { "s": "Alice", "p": "speaks", "o": "German", "sType": "Person", "oType": "Concept" }, "entities": ["Alice"] },
+    { "kind": "assert", "id": "a-t5", "text": "I speak English.",
+      "fact": { "s": "Alice", "p": "speaks", "o": "English", "sType": "Person", "oType": "Concept" }, "entities": ["Alice"] },
+    { "kind": "assert", "id": "a-t6", "text": "I speak Spanish.",
+      "fact": { "s": "Alice", "p": "speaks", "o": "Spanish", "sType": "Person", "oType": "Concept" }, "entities": ["Alice"] },
+
+    { "kind": "assert", "id": "a-t2b", "text": "The Helios project uses Python.",
+      "fact": { "s": "Helios", "p": "usesTool", "o": "Python", "sType": "Concept", "oType": "Concept" }, "entities": ["Helios"] },
+    { "kind": "assert", "id": "a-t2c", "text": "The Helios project uses Rust.",
+      "fact": { "s": "Helios", "p": "usesTool", "o": "Rust", "sType": "Concept", "oType": "Concept" }, "entities": ["Helios"] },
+
+    { "kind": "pad", "count": 30 },
+
+    { "kind": "probe", "id": "a-p1", "category": "H1",
+      "query": "What project do I work on?",
+      "paraphrases": ["Which project am I on?", "Name my project."],
+      "entities": ["Alice"],
+      "gold": { "type": "exact", "value": "Helios" } },
+
+    { "kind": "probe", "id": "a-p2", "category": "H2",
+      "query": "Which languages do I speak?",
+      "paraphrases": ["List all the languages I know."],
+      "entities": ["Alice"],
+      "gold": { "type": "set", "value": ["German", "English", "Spanish"],
+        "candidates": ["German", "English", "Spanish", "French", "Italian", "Mandarin", "Portuguese"] } },
+
+    { "kind": "probe", "id": "a-p2mh", "category": "H2",
+      "query": "Which tools do the projects I work on use?",
+      "paraphrases": ["What technologies are used by my project?"],
+      "entities": ["Alice"],
+      "hops": ["worksOn", "usesTool"],
+      "gold": { "type": "set", "value": ["Python", "Rust"],
+        "candidates": ["Python", "Rust", "Java", "Go", "Docker", "Kubernetes"] } },
+
+    { "kind": "probe", "id": "a-p4", "category": "H4",
+      "query": "When and from which message did you learn that I work on Helios? Cite the source message id and time.",
+      "entities": ["Alice"],
+      "gold": { "type": "provenance", "value": "Helios", "sourceTurnId": "a-t2", "tsToleranceSec": 5 } },
+
+    { "kind": "probe", "id": "a-p5", "category": "H1",
+      "query": "What is my profession or main task?",
+      "entities": ["Alice"],
+      "gold": { "type": "exact", "value": "Helios" } },
+
+    { "kind": "mutate", "id": "a-t7", "text": "Actually I live in Berlin now.",
+      "fact": { "s": "User", "p": "livesIn", "o": "Berlin", "sType": "Person", "oType": "Place" }, "supersedes": "livesIn", "entities": ["alice"] },
+    { "kind": "pad", "count": 20 },
+
+    { "kind": "probe", "id": "a-p3", "category": "H3",
+      "query": "Where do I live now?",
+      "entities": ["alice"],
+      "gold": { "type": "value+flag", "value": "Berlin", "expectConflictFlag": true } }
+  ]
+}

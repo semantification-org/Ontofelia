@@ -1,0 +1,43 @@
+import type { OntofeliaConfig } from '@ontofelia/config';
+import type { ProviderAdapter, TriplestoreAdapter } from '@ontofelia/core';
+import type { SessionStore } from '@ontofelia/session-store';
+import type { AgentRuntime } from '@ontofelia/agent-runtime';
+import type { ToolRegistry } from '@ontofelia/tools';
+import type { ChannelRegistry, PairingStore, AllowlistStore } from '@ontofelia/channels';
+import type { SkillLoader, SkillRegistry, SkillExecutor } from '@ontofelia/skills';
+import type { PluginLoader, PluginRegistry } from '@ontofelia/plugins';
+import type { JobScheduler, WebhookRegistry } from '@ontofelia/scheduler';
+import type { MediaStore, SignedUrlService, MimeDetector } from '@ontofelia/media';
+import type { NodeRegistry } from '@ontofelia/nodes';
+import type { FusekiManager, KnowledgeEngine, OntologyManager, ConflictDetector, ReflectionRunner } from '@ontofelia/semantic-memory';
+import type { SandboxAdapter } from '@ontofelia/sandbox';
+
+export interface GatewayContext {
+  config: OntofeliaConfig;
+  sessionStore: SessionStore;
+  provider: ProviderAdapter;
+  agents: Map<string, AgentRuntime>;
+  triplestore: TriplestoreAdapter;
+  fusekiManager: FusekiManager | null;
+  knowledgeEngine: KnowledgeEngine;
+  ontologyManager: OntologyManager;
+  conflictDetector: ConflictDetector;
+  reflectionRunner: ReflectionRunner;
+  toolRegistry: ToolRegistry;
+  channelRegistry: ChannelRegistry;
+  pairingStore: PairingStore;
+  allowlistStore: AllowlistStore;
+  skillLoader: SkillLoader;
+  skillRegistry: SkillRegistry;
+  skillExecutor: SkillExecutor;
+  pluginLoader: PluginLoader;
+  pluginRegistry: PluginRegistry;
+  scheduler: JobScheduler;
+  webhookRegistry: WebhookRegistry;
+  sandboxAdapter: SandboxAdapter;
+  mediaStore: MediaStore;
+  signedUrlService: SignedUrlService;
+  mimeDetector: MimeDetector;
+  nodeRegistry: NodeRegistry;
+  ontologyBasePath: string;
+}

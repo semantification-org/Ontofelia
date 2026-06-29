@@ -1,0 +1,33 @@
+{
+  "name": "@ontofelia/sandbox",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "description": "Ontofelia Sandbox Environment",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@ontofelia/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.0",
+    "vitest": "^2.0.5",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0"
+  },
+  "license": "Apache-2.0"
+}

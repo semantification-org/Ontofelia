@@ -1,0 +1,25 @@
+{
+  "name": "@ontofelia/reasoner",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "reasoner",
+    "triples": {
+      "defaults": true,
+      "additional": []
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:native": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@ontofelia/config",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@ontofelia/core": "workspace:*",
+    "defu": "^6.1.7",
+    "json5": "^2.2.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.0",
+    "vitest": "^2.0.5"
+  },
+  "license": "Apache-2.0"
+}

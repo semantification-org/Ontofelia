@@ -1,0 +1,160 @@
+@prefix core: <urn:shared:ontology#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ── Graph Registry ──
+# Seed for the urn:shared:meta Named Graph. Describes every Named Graph in the
+# system: its purpose, who may write to it, and its visibility. This is the
+# machine-readable counterpart of docs/knowledge-graph-concept.md §2 and of
+# the GraphRegistry whitelist enforced in code.
+#
+# `<agent>` graphs are shown for the primary agent "ontofelia". When a new
+# agent is registered, an analogous set of entries is added for it.
+
+# ── Shared layer (agent-agnostic) ──
+
+<urn:shared:ontology> a core:NamedGraph ;
+    core:graphType  "tbox" ;
+    core:writableBy "admin" ;
+    core:visibility "public" ;
+    rdfs:comment    "Foundational model (TBox): the classes and properties allowed system-wide. Static, versioned, admin-only." .
+
+<urn:shared:meta> a core:NamedGraph ;
+    core:graphType  "registry" ;
+    core:writableBy "admin" ;
+    core:visibility "public" ;
+    rdfs:comment    "This graph: the registry describing every Named Graph — purpose, write policy, visibility." .
+
+<urn:shared:shapes> a core:NamedGraph ;
+    core:graphType  "shapes" ;
+    core:writableBy "admin" ;
+    core:visibility "public" ;
+    rdfs:comment    "SHACL constraints validated before every write." .
+
+<urn:shared:world> a core:NamedGraph ;
+    core:graphType  "consensus" ;
+    core:writableBy "consolidation" ;
+    core:visibility "public" ;
+    rdfs:comment    "Consensus truth — general world knowledge promoted by multi-agent consolidation. No agent writes here directly." .
+
+<urn:shared:claims> a core:NamedGraph ;
+    core:graphType  "shared-claims" ;
+    core:writableBy "consolidation" ;
+    core:visibility "public" ;
+    rdfs:comment    "Provenance (core:Claim objects) for the consensus facts in urn:shared:world." .
+
+<urn:shared:evidence> a core:NamedGraph ;
+    core:graphType    "shared-evidence" ;
+    core:writableBy   "consolidation" ;
+    core:visibility   "public" ;
+    core:retentionDays 365 ;
+    rdfs:comment      "Public evidence (core:Evidence objects) backing the consensus facts." .
+
+# ── Agent self-model (write-protected) ──
+
+<urn:ontofelia:self> a core:NamedGraph ;
+    core:graphType  "self-model" ;
+    core:writableBy "admin" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "The agent's identity, persona and capabilities. Write-protected — never written by the runtime ingestion pipeline." .
+
+<urn:ontofelia:skills> a core:NamedGraph ;
+    core:graphType  "skills" ;
+    core:writableBy "system" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "The agent's available tools and MCP services. Auto-generated from the tool registry; read-only otherwise." .
+
+<urn:ontofelia:setup> a core:NamedGraph ;
+    core:graphType  "setup" ;
+    core:writableBy "admin" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "The agent's technical environment: host, sandbox level, triplestore and reasoner backends." .
+
+# ── Agent knowledge (long-term memory) ──
+
+<urn:ontofelia:user:owner> a core:NamedGraph ;
+    core:graphType  "user-knowledge" ;
+    core:writableBy "pipeline" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Per-user knowledge for the owner. Facts the user shares about themselves and their expectations. One such graph exists per user id." .
+
+<urn:ontofelia:worldview> a core:NamedGraph ;
+    core:graphType  "worldview" ;
+    core:writableBy "pipeline" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "The agent's validated individual world knowledge — facts it has accepted and uses actively in retrieval." .
+
+<urn:ontofelia:schema> a core:NamedGraph ;
+    core:graphType  "schema" ;
+    core:writableBy "pipeline" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Agent-local schema: predicates the agent learned at runtime. Keeps the admin-only urn:shared:ontology protected while new predicates stay usable immediately." .
+
+<urn:ontofelia:claims> a core:NamedGraph ;
+    core:graphType  "claims" ;
+    core:writableBy "pipeline" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Provenance: accepted core:Claim objects with confidence, source, timestamps and evidence links." .
+
+<urn:ontofelia:evidence> a core:NamedGraph ;
+    core:graphType    "evidence" ;
+    core:writableBy   "pipeline" ;
+    core:visibility   "agent-only" ;
+    core:retentionDays 365 ;
+    rdfs:comment      "Evidence: core:Evidence objects and raw source material (message spans, document excerpts, tool results)." .
+
+<urn:ontofelia:conflicts> a core:NamedGraph ;
+    core:graphType  "conflicts" ;
+    core:writableBy "pipeline" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Detected contradictions as standalone core:Conflict objects with context and resolution status." .
+
+<urn:ontofelia:inferred> a core:NamedGraph ;
+    core:graphType  "inferred" ;
+    core:writableBy "reasoner" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Reasoner materialization target — triples inferred from the agent's accepted knowledge graphs. Recomputable; never edited by hand." .
+
+# ── Cognitive architecture (docs/cognitive-architecture/02) ──
+# Additive ':cog:' sub-namespace. The cognitive cycle is the sole writer.
+# Fixed graphs are listed exactly; the per-session/per-cycle graphs are listed
+# once as a representative pattern (the actual URIs are minted at runtime and
+# validated by GraphRegistry, mirroring how session graphs are handled).
+
+<urn:ontofelia:cog:episodic> a core:NamedGraph ;
+    core:graphType  "cog-episodic" ;
+    core:writableBy "cognition" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Episodic long-term memory: one cogt:Episode per message, tool call and response, with transcript references and timestamps." .
+
+<urn:ontofelia:cog:procedural> a core:NamedGraph ;
+    core:graphType  "cog-procedural" ;
+    core:writableBy "cognition" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Procedural long-term memory: skill traces, skill summaries and sequence skills learned from successful tool-use patterns." .
+
+<urn:ontofelia:cog:meta> a core:NamedGraph ;
+    core:graphType  "cog-meta" ;
+    core:writableBy "cognition" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Metacognition store: reflective markers, impasses (incl. chronic impasses) and cross-cycle findings." .
+
+<urn:ontofelia:cog:goals:longterm> a core:NamedGraph ;
+    core:graphType  "cog-goals" ;
+    core:writableBy "cognition" ;
+    core:visibility "agent-only" ;
+    rdfs:comment    "Durable, cross-session goals promoted at session close (reserved 'longterm' scope of the goals sub-namespace)." .
+
+# Parameterised cognitive graphs are NOT listed as core:NamedGraph resources
+# here — like the ephemeral session graph, their URIs are minted per session/
+# cycle at runtime and validated against the COG_PARAM pattern in GraphRegistry.
+# For reference, the patterns and their write policy ("cognition") are:
+#   urn:ontofelia:cog:working:<sessionId>:<cycleId>
+#       cog-working   — per-cycle working memory (the blackboard); short-lived,
+#                       salience-weighted cogt:WorkingMemoryEntry items.
+#   urn:ontofelia:cog:goals:<sessionId>
+#       cog-goals     — session-scoped goal stack (cogt:Goal); promoted to
+#                       urn:ontofelia:cog:goals:longterm at session close.
+#   urn:ontofelia:cog:cycles:<sessionId>
+#       cog-cycles    — reified cogt:Cycle / cogt:Phase records for a session.

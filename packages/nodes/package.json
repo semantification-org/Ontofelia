@@ -1,0 +1,36 @@
+{
+  "name": "@ontofelia/nodes",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "description": "Ontofelia Nodes Protocol",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@ontofelia/core": "workspace:*",
+    "@ontofelia/media": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "~5.7.0",
+    "vitest": "^2.0.5",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0"
+  },
+  "license": "Apache-2.0"
+}

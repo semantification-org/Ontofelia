@@ -1,0 +1,13 @@
+{
+  "name": "summarize",
+  "version": "0.1.0",
+  "description": "Summarizes long texts",
+  "commands": [
+    {
+      "name": "summarize",
+      "description": "Summarize the last text",
+      "usage": "/skill summarize [text]"
+    }
+  ],
+  "tags": ["text", "utility"]
+}

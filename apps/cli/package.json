@@ -1,0 +1,36 @@
+{
+  "name": "@ontofelia/cli",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "ontofelia": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.4.3",
+    "@ontofelia/config": "workspace:*",
+    "@ontofelia/core": "workspace:*",
+    "@ontofelia/gateway": "workspace:^",
+    "@ontofelia/providers": "workspace:*",
+    "@ontofelia/scheduler": "workspace:^",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "defu": "^6.1.7",
+    "json5": "^2.2.3"
+  },
+  "devDependencies": {
+    "ts-morph": "^28.0.0",
+    "typescript": "~5.7.0",
+    "vitest": "^2.0.5"
+  },
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,515 @@
+@prefix onto: <urn:ontofelia:core#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix dc:   <http://purl.org/dc/elements/1.1/> .
+
+onto: rdf:type owl:Ontology ;
+    dc:title "Ontofelia Core Ontology" ;
+    dc:description "Core vocabulary for Ontofelia semantic memory — real RDF ABox/TBox architecture" ;
+    owl:versionInfo "0.2.0" .
+
+# === Core Entity Classes (TBox) ===
+onto:Entity rdf:type owl:Class ;
+    rdfs:label "Entity" ;
+    rdfs:comment "A person, place, thing, or concept" .
+
+onto:Person rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Person" .
+
+onto:Place rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Place" .
+
+onto:Organization rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Organization" .
+
+onto:Concept rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Concept" .
+
+onto:Event rdf:type owl:Class ;
+    rdfs:label "Event" ;
+    rdfs:comment "Something that happened" .
+
+onto:Animal rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Animal" ;
+    rdfs:comment "A living non-human creature (pets, wildlife)" .
+
+onto:Agent rdfs:subClassOf onto:Entity ;
+    rdf:type owl:Class ;
+    rdfs:label "Agent" ;
+    rdfs:comment "An AI assistant or autonomous system" .
+
+# === Disjoint Classes (for Conflict Detection) ===
+onto:Person owl:disjointWith onto:Place .
+onto:Person owl:disjointWith onto:Organization .
+onto:Person owl:disjointWith onto:Animal .
+onto:Place owl:disjointWith onto:Organization .
+onto:Place owl:disjointWith onto:Animal .
+onto:Organization owl:disjointWith onto:Animal .
+
+# === Common Object Properties ===
+onto:relatedTo rdf:type owl:ObjectProperty ;
+    rdfs:domain onto:Entity ;
+    rdfs:range onto:Entity ;
+    rdfs:label "related to" .
+
+onto:knows rdf:type owl:ObjectProperty, owl:SymmetricProperty ;
+    rdfs:subPropertyOf onto:relatedTo ;
+    rdfs:domain onto:Person ;
+    rdfs:range onto:Person ;
+    rdfs:label "knows" .
+
+onto:worksAt rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf onto:relatedTo ;
+    rdfs:domain onto:Person ;
+    rdfs:range onto:Organization ;
+    rdfs:label "works at" .
+
+onto:livesIn rdf:type owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:subPropertyOf onto:relatedTo ;
+    rdfs:domain onto:Person ;
+    rdfs:range onto:Place ;
+    rdfs:label "lives in" .
+
+onto:locatedIn rdf:type owl:ObjectProperty, owl:TransitiveProperty ;
+    rdfs:subPropertyOf onto:relatedTo ;
+    rdfs:range onto:Place ;
+    rdfs:label "located in" .
+
+onto:memberOf rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf onto:relatedTo ;
+    rdfs:domain onto:Person ;
+    rdfs:range onto:Organization ;
+    rdfs:label "member of" .
+
+onto:hasRole rdf:type owl:ObjectProperty ;
+    rdfs:domain onto:Person ;
+    rdfs:range onto:Concept ;
+    rdfs:label "has role" .
+
+onto:partOf rdf:type owl:ObjectProperty, owl:TransitiveProperty ;
+    rdfs:domain onto:Entity ;
+    rdfs:range onto:Entity ;
+    rdfs:label "part of" .
+
+# === Common Datatype Properties ===
+onto:name rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Entity ;
+    rdfs:range xsd:string ;
+    rdfs:label "name" .
+
+onto:hasPreference rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Person ;
+    rdfs:range xsd:string ;
+    rdfs:label "has preference" .
+
+onto:hasBirthday rdf:type owl:DatatypeProperty, owl:FunctionalProperty ;
+    rdfs:domain onto:Person ;
+    rdfs:range xsd:date ;
+    rdfs:label "has birthday" .
+
+onto:hasEmail rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Person ;
+    rdfs:range xsd:string ;
+    rdfs:label "has email" .
+
+onto:description rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Entity ;
+    rdfs:range xsd:string ;
+    rdfs:label "description" .
+
+# === Provenance Classes ===
+onto:Provenance rdf:type owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "Provenance" ;
+    rdfs:comment "Tracks the origin and trust of a stored triple" .
+
+onto:tracksSubject rdf:type owl:ObjectProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:label "tracks subject" ;
+    rdfs:comment "The subject entity of the tracked triple" .
+
+onto:tracksPredicate rdf:type owl:ObjectProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:label "tracks predicate" ;
+    rdfs:comment "The predicate of the tracked triple" .
+
+onto:tracksObject rdf:type owl:ObjectProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:label "tracks object" ;
+    rdfs:comment "The object of the tracked triple" .
+
+onto:confidence rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Confidence level: high, medium, low" .
+
+onto:trustLevel rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Trust level: trusted, untrusted" .
+
+onto:source rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Source of the fact: user, agent, tool" .
+
+onto:sessionId rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:string .
+
+onto:createdAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:Provenance ;
+    rdfs:range xsd:dateTime .
+
+# === Reasoning Markers ===
+onto:inferredBy rdf:type owl:AnnotationProperty ;
+    rdfs:label "inferred by" .
+
+# === Reflection Event ===
+onto:ReflectionEvent rdf:type owl:Class ;
+    rdfs:label "Reflection Event" .
+
+onto:reflectedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:ReflectionEvent ;
+    rdfs:range xsd:dateTime .
+
+onto:conflictsFound rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:ReflectionEvent ;
+    rdfs:range xsd:integer .
+
+# ============================================================================
+# Cognitive Architecture vocabulary (cogt:)
+# docs/cognitive-architecture/02-named-graph-topology.md
+# Namespace urn:shared:ontology#cog/ — additive TBox for the cognitive layer.
+# ============================================================================
+@prefix cogt: <urn:shared:ontology#cog/> .
+
+# === Classes ===
+cogt:Cycle rdf:type owl:Class ;
+    rdfs:label "Cognitive Cycle" ;
+    rdfs:comment "One synchronous perceive-comprehend-decide-act-learn cycle per turn." .
+
+cogt:Phase rdf:type owl:Class ;
+    rdfs:label "Cycle Phase" ;
+    rdfs:comment "One of the six reified phases of a cognitive cycle." .
+
+cogt:WorkingMemoryEntry rdf:type owl:Class ;
+    rdfs:label "Working Memory Entry" ;
+    rdfs:comment "A salience-weighted entry on the per-cycle blackboard." .
+
+cogt:Episode rdf:type owl:Class ;
+    rdfs:label "Episode" ;
+    rdfs:comment "An episodic-memory record: a message received, tool called/completed, or response sent." .
+
+cogt:DailySummary rdf:type owl:Class ;
+    rdfs:label "Daily Summary" ;
+    rdfs:comment "Cold-tier retention collapse: one summary per (session, day) replacing the day's episodes (doc 05 §7)." .
+
+cogt:summaryDate rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:DailySummary ; rdfs:range xsd:date ; rdfs:label "summary date" .
+
+cogt:episodeCount rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:DailySummary ; rdfs:range xsd:integer ; rdfs:label "collapsed episode count" .
+
+cogt:frozen rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:boolean ; rdfs:label "frozen (id-only tombstone)" .
+
+cogt:Goal rdf:type owl:Class ;
+    rdfs:label "Goal" ;
+    rdfs:comment "An explicit intention on the goal stack." .
+
+cogt:SkillTrace rdf:type owl:Class ;
+    rdfs:label "Skill Trace" ;
+    rdfs:comment "A single procedural-memory record of one tool invocation." .
+
+cogt:Skill rdf:type owl:Class ;
+    rdfs:label "Skill" ;
+    rdfs:comment "A consolidated summary over many skill traces for a tool/context." .
+
+cogt:SequenceSkill rdf:type owl:Class ;
+    rdfs:label "Sequence Skill" ;
+    rdfs:comment "A learned recurring ordered sequence of tool calls." .
+
+cogt:ReflectiveMarker rdf:type owl:Class ;
+    rdfs:label "Reflective Marker" ;
+    rdfs:comment "A metacognitive summary written at the close of each cycle." .
+
+cogt:Impasse rdf:type owl:Class ;
+    rdfs:label "Impasse" ;
+    rdfs:comment "A detected blocker that triggers a metacognitive subcycle." .
+
+cogt:ChronicImpasse rdfs:subClassOf cogt:Impasse ;
+    rdf:type owl:Class ;
+    rdfs:label "Chronic Impasse" ;
+    rdfs:comment "A recurring impasse kind that exceeded its daily rate cap." .
+
+cogt:CapabilityGap rdf:type owl:Class ;
+    rdfs:label "Capability Gap" ;
+    rdfs:comment "A capability the agent repeatedly lacked, surfaced from constraint pressure." .
+
+# === Self-model (Phase G) ===
+cogt:Capability rdf:type owl:Class ;
+    rdfs:label "Capability" ;
+    rdfs:comment "Something the agent CAN do, optionally scoped to a goal type." .
+
+cogt:Constraint rdf:type owl:Class ;
+    rdfs:label "Constraint" ;
+    rdfs:comment "Something the agent MUST or MUST NOT do, enforced by a named policy." .
+
+cogt:hasCapability rdf:type owl:ObjectProperty ;
+    rdfs:range cogt:Capability ; rdfs:label "has capability" .
+cogt:hasConstraint rdf:type owl:ObjectProperty ;
+    rdfs:range cogt:Constraint ; rdfs:label "has constraint" .
+cogt:relevantToGoalType rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Capability ; rdfs:label "relevant to goal type" .
+cogt:requiresApproval rdf:type owl:ObjectProperty ;
+    rdfs:label "requires approval" .
+cogt:authorityOver rdf:type owl:ObjectProperty ;
+    rdfs:label "authority over" .
+cogt:owner rdf:type owl:ObjectProperty ;
+    rdfs:label "owner" .
+cogt:operatesIn rdf:type owl:ObjectProperty ;
+    rdfs:label "operates in" .
+cogt:requires rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "requires tool" .
+cogt:applies rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "applies to tool" .
+cogt:enforcedBy rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Constraint ; rdfs:range xsd:string ; rdfs:label "enforced by" .
+cogt:ownerRelation rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "owner relation" .
+
+# === Structural object properties ===
+cogt:partOfCycle rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Phase ; rdfs:range cogt:Cycle ;
+    rdfs:label "part of cycle" .
+
+cogt:writtenBy rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range cogt:Phase ;
+    rdfs:label "written by phase" .
+
+cogt:precededBy rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range cogt:Episode ;
+    rdfs:label "preceded by" .
+
+cogt:partOfGoal rdf:type owl:ObjectProperty ;
+    rdfs:range cogt:Goal ;
+    rdfs:label "part of goal" .
+
+cogt:forGoal rdf:type owl:ObjectProperty ;
+    rdfs:range cogt:Goal ;
+    rdfs:label "for goal" .
+
+cogt:parentGoal rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range cogt:Goal ;
+    rdfs:label "parent goal" .
+
+cogt:carriedFrom rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range cogt:WorkingMemoryEntry ;
+    rdfs:label "carried from" .
+
+cogt:reflectsOn rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range cogt:Cycle ;
+    rdfs:label "reflects on" .
+
+# === Datatype properties ===
+cogt:salience rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:decimal ;
+    rdfs:label "salience" .
+cogt:entryKind rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:string ; rdfs:label "entry kind" .
+cogt:writtenTo rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:string ; rdfs:label "written to buffer" .
+cogt:payload rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "payload" .
+cogt:retrievalScore rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:decimal ; rdfs:label "retrieval score" .
+cogt:sourceGraph rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "source graph" .
+cogt:carryForward rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:boolean ; rdfs:label "carry forward" .
+cogt:writtenAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:dateTime ; rdfs:label "written at" .
+cogt:expiresAfter rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:range xsd:integer ; rdfs:label "expires after (cycles)" .
+cogt:refersTo rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:WorkingMemoryEntry ; rdfs:label "refers to" .
+
+cogt:phaseKind rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Phase ; rdfs:range xsd:string ; rdfs:label "phase kind" .
+cogt:ordinal rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Phase ; rdfs:range xsd:integer ; rdfs:label "ordinal" .
+cogt:cycleStatus rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Cycle ; rdfs:range xsd:string ; rdfs:label "cycle status" .
+cogt:startedAt rdf:type owl:DatatypeProperty ; rdfs:range xsd:dateTime ; rdfs:label "started at" .
+cogt:endedAt rdf:type owl:DatatypeProperty ; rdfs:range xsd:dateTime ; rdfs:label "ended at" .
+cogt:createdAt rdf:type owl:DatatypeProperty ; rdfs:range xsd:dateTime ; rdfs:label "created at" .
+cogt:occurredAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:dateTime ; rdfs:label "occurred at" .
+
+cogt:episodeType rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "episode type" .
+cogt:transcriptRef rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "transcript ref" .
+cogt:episodeId rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "episode id (sortable)" .
+cogt:sessionId rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "session id" .
+cogt:cycleId rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "cycle id" .
+cogt:channel rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "channel" .
+cogt:errorClass rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "error class" .
+cogt:tags rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Episode ; rdfs:range xsd:string ; rdfs:label "tag" .
+cogt:actor rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Episode ; rdfs:label "actor" .
+cogt:about rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Episode ; rdfs:label "about entity" .
+
+cogt:goalType rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "goal type" .
+cogt:statement rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "statement" .
+cogt:priority rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:decimal ; rdfs:label "priority" .
+cogt:goalStatus rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "goal status" .
+cogt:dueAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:dateTime ; rdfs:label "due at" .
+cogt:goalId rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "goal id (sortable)" .
+cogt:goalLabel rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "goal label (human-readable)" .
+cogt:updatedAt rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:dateTime ; rdfs:label "updated at" .
+cogt:resolvedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:dateTime ; rdfs:label "resolved at" .
+cogt:abandonedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:dateTime ; rdfs:label "abandoned at" .
+cogt:blockedReason rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "blocked reason" .
+cogt:longTerm rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:boolean ; rdfs:label "long term" .
+cogt:successCriterion rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "success criterion" .
+cogt:plannedSteps rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "planned steps" .
+cogt:currentStep rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "current step" .
+cogt:stepProgress rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range xsd:string ; rdfs:label "step progress" .
+cogt:triggeredByEpisode rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Goal ; rdfs:range cogt:Episode ; rdfs:label "triggered by episode" .
+cogt:triggeredByUser rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Goal ; rdfs:label "triggered by user" .
+
+cogt:toolName rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "tool name" .
+cogt:toolArgsBrief rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "tool args (redacted brief)" .
+cogt:outcome rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "outcome" .
+cogt:durationMs rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:integer ; rdfs:label "duration ms" .
+cogt:userSatisfied rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:boolean ; rdfs:label "user satisfied" .
+cogt:traceId rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "trace id (sortable)" .
+cogt:toolArgsHash rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "tool args hash (post-mask)" .
+cogt:executedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:dateTime ; rdfs:label "executed at" .
+cogt:forGoalType rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "for goal type" .
+cogt:sequencePos rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:integer ; rdfs:label "sequence position" .
+cogt:sequenceLen rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:integer ; rdfs:label "sequence length" .
+cogt:previousTrace rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range cogt:SkillTrace ; rdfs:label "previous trace" .
+cogt:agentId rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "agent id" .
+cogt:proceduralAdherence rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SkillTrace ; rdfs:range xsd:string ; rdfs:label "procedural adherence" .
+
+cogt:successCount rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:integer ; rdfs:label "success count" .
+cogt:failureCount rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:integer ; rdfs:label "failure count" .
+cogt:partialCount rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:integer ; rdfs:label "partial count" .
+cogt:meanDurationMs rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:decimal ; rdfs:label "mean duration ms" .
+cogt:p95DurationMs rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:decimal ; rdfs:label "p95 duration ms" .
+cogt:lastUsedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:dateTime ; rdfs:label "last used at" .
+cogt:successRate rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:decimal ; rdfs:label "success rate" .
+cogt:satisfactionRate rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:decimal ; rdfs:label "satisfaction rate" .
+cogt:hasTrace rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range cogt:SkillTrace ; rdfs:label "has trace" .
+cogt:typicalArgPattern rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Skill ; rdfs:range xsd:string ; rdfs:label "typical arg pattern" .
+
+cogt:label rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string ; rdfs:label "label" .
+cogt:hasStep rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:SequenceSkill ; rdfs:range cogt:Skill ; rdfs:label "has step" .
+cogt:stepIndex rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SequenceSkill ; rdfs:range xsd:integer ; rdfs:label "step index" .
+cogt:notes rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:SequenceSkill ; rdfs:range xsd:string ; rdfs:label "notes" .
+
+cogt:impasseKind rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range xsd:string ; rdfs:label "impasse kind" .
+cogt:resolution rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range xsd:string ; rdfs:label "resolution" .
+cogt:flaggedInPhase rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range cogt:Phase ; rdfs:label "flagged in phase" .
+cogt:flaggedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range xsd:dateTime ; rdfs:label "flagged at" .
+cogt:context rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range xsd:string ; rdfs:label "context" .
+cogt:resolvedBy rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Impasse ; rdfs:range xsd:string ; rdfs:label "resolved by" .
+cogt:occurrences rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:integer ; rdfs:label "occurrences" .
+cogt:forCapability rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:CapabilityGap ; rdfs:range xsd:string ; rdfs:label "for capability" .
+
+cogt:goalProgress rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:string ; rdfs:label "goal progress" .
+cogt:newKnowledge rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:string ; rdfs:label "new knowledge" .
+cogt:uncertainty rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:string ; rdfs:label "uncertainty" .
+cogt:toolsUsed rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:string ; rdfs:label "tools used" .
+cogt:noted rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:string ; rdfs:label "noted" .
+cogt:toolErrors rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:integer ; rdfs:label "tool errors" .
+cogt:emptyRetrieval rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:boolean ; rdfs:label "empty retrieval" .
+cogt:goalDrift rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:boolean ; rdfs:label "goal drift" .
+cogt:toolChurn rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:boolean ; rdfs:label "tool churn" .
+cogt:constraintPressure rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range xsd:integer ; rdfs:label "constraint pressure" .
+cogt:flaggedImpasse rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range cogt:Impasse ; rdfs:label "flagged impasse" .
+cogt:resolvedImpasse rdf:type owl:ObjectProperty ;
+    rdfs:domain cogt:ReflectiveMarker ; rdfs:range cogt:Impasse ; rdfs:label "resolved impasse" .
