@@ -17,9 +17,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3 build-essential
 
+      # pnpm version comes from package.json "packageManager" (pnpm@9.0.0).
+      # Do NOT also set `version:` here — action-setup@v4 errors on a conflict.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
