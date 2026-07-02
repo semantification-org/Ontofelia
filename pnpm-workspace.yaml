@@ -1,5 +1,13 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+# Native dependency build approval. This MUST stay in sync with
+# package.json → pnpm.onlyBuiltDependencies. pnpm 9.15 honours the
+# workspace-level allowBuilds and would otherwise skip any dependency not
+# listed here — previously only esbuild was allowed, so better-sqlite3 (and
+# sharp) never compiled their native binaries on a cold store, and the gateway
+# failed to start with "Could not locate the bindings file".
 allowBuilds:
+  better-sqlite3: true
   esbuild: true
+  sharp: true
