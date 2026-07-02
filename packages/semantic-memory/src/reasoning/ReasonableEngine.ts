@@ -33,14 +33,19 @@ export class ReasonableEngine {
     const newTtl = newTriples.map(t => ReasonableEngine.tripleToNt(t)).join('\n');
 
     try {
-      // Baseline: what is already derivable without the new facts.
-      const baseline = inferTriples(tboxTtl, aboxTtl);
+      // inferTriples is now async (the native reasoner runs on a libuv worker
+      // thread instead of blocking the event loop). Baseline and extended are
+      // independent runs, so materialize them in parallel — this also exercises
+      // the reasoner under concurrent calls.
+      const [baseline, extended] = await Promise.all([
+        // Baseline: what is already derivable without the new facts.
+        inferTriples(tboxTtl, aboxTtl),
+        // Extended: derivable once the new facts are added.
+        inferTriples(tboxTtl, `${aboxTtl}\n${newTtl}`),
+      ]);
       const baselineKeys = new Set(
         baseline.map(t => ReasonableEngine.rawTripleKey(t)),
       );
-
-      // Extended: derivable once the new facts are added.
-      const extended = inferTriples(tboxTtl, `${aboxTtl}\n${newTtl}`);
 
       // Keep only what the new facts caused, and drop the new facts
       // themselves (they are stored in their target graph, not here).

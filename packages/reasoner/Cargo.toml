@@ -11,6 +11,12 @@ napi = { version = "2.16.14", default-features = false, features = ["napi4"] }
 napi-derive = "2.16.12"
 reasonable = "0.4.1"
 oxrdf = "0.3.3"
+# In-memory Turtle/N-Triples parsing so we never touch the filesystem (see
+# lib.rs). Pinned to the same versions `reasonable` uses internally so the
+# `rio_api::model::Triple` type fed to `reasonable::common::rio_to_oxrdf`
+# unifies to a single crate version.
+rio_api = "0.7.1"
+rio_turtle = "0.7.1"
 
 [build-dependencies]
 napi-build = "2.1.3"

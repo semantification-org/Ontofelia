@@ -473,6 +473,8 @@ dependencies = [
  "napi-derive",
  "oxrdf",
  "reasonable",
+ "rio_api",
+ "rio_turtle",
 ]
 
 [[package]]
