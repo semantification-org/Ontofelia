@@ -1,0 +1,76 @@
+name: Reasoner Native Build
+
+# Builds the @ontofelia/reasoner N-API addon from source (packages/reasoner/
+# src/lib.rs) on every supported platform. The compiled .node binaries are NOT
+# committed to the repo — a checked-in native artifact cannot be verified
+# against its source and silently goes stale when lib.rs changes. This workflow
+# is the trustworthy, reproducible replacement:
+#   • on push / PR it proves the addon compiles on Linux and Windows and
+#     uploads each binary as a downloadable workflow artifact;
+#   • on a version tag (v*) it attaches the binaries to the GitHub Release so
+#     consumers who cannot build locally can grab a verifiable prebuilt.
+
+on:
+  push:
+    branches: [main, 'rel/**']
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build (${{ matrix.triple }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triple: linux-x64-gnu
+          - os: windows-latest
+            triple: win32-x64-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/reasoner
+
+      # pnpm version comes from package.json "packageManager" (pnpm@9.0.0).
+      # Do NOT also set `version:` here — action-setup@v4 errors on a conflict.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      # The addon build only needs @napi-rs/cli (build.mjs invokes the napi
+      # CLI directly), so skip all lifecycle scripts: a full script-running
+      # install would compile better-sqlite3 from source on the Windows runner
+      # (no prebuilt for its Node version), where the node-gyp bundled with
+      # pnpm cannot detect the runner's Visual Studio toolchain. The --filter
+      # narrows the install where supported; the pinned pnpm 9.0.0 ignores it
+      # under --frozen-lockfile, hence --ignore-scripts is the load-bearing flag.
+      - name: Install dependencies (no lifecycle scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter "@ontofelia/reasoner..."
+
+      # Build only the reasoner package. With no committed .node present,
+      # scripts/build.mjs compiles the addon via `napi build --release`.
+      - name: Build reasoner (napi)
+        run: pnpm --filter @ontofelia/reasoner build
+
+      - name: Upload native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: reasoner-${{ matrix.triple }}
+          path: packages/reasoner/reasoner.${{ matrix.triple }}.node
+          if-no-files-found: error
+
+      # Attach the freshly built binaries to the GitHub Release on tagged builds.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/reasoner/reasoner.${{ matrix.triple }}.node
