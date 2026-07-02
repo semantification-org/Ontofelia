@@ -315,9 +315,10 @@ if [ "$NEED_BUILD_TOOLS" = true ]; then
 fi
 ok "Build tools"
 
-# Rust toolchain — only needed to compile the native @ontofelia/reasoner
-# addon. The repo ships a prebuilt reasoner.<triple>.node binary, so Rust is
-# only required when that prebuilt binary is missing for this platform.
+# Rust toolchain — needed to compile the native @ontofelia/reasoner addon.
+# The reasoner .node binary is NOT committed to the repo (it cannot be verified
+# against source and goes stale), so a fresh clone has no *.node here and Rust
+# is installed below. If a CI-built binary was dropped in place, we skip Rust.
 REASONER_DIR="$SCRIPT_DIR/packages/reasoner"
 if ! ls "$REASONER_DIR"/*.node &> /dev/null; then
   if ! command -v cargo &> /dev/null; then

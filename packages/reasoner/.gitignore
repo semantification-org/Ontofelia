@@ -1,5 +1,8 @@
-
 /target
 /node_modules
 
-/target
+# Native N-API artifacts are built from src/lib.rs (locally via `pnpm build`
+# with a Rust toolchain, or in CI — see .github/workflows/reasoner-build.yml).
+# They are deliberately NOT committed: a checked-in binary cannot be verified
+# against source and silently goes stale when lib.rs changes.
+*.node

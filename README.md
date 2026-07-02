@@ -164,6 +164,7 @@ EVAL_PROVIDER=openrouter EVAL_MODELS="deepseek/deepseek-v4-flash,openai/gpt-4o-m
 - **Node.js 20+** (LTS) — download from [nodejs.org](https://nodejs.org)
 - **pnpm** v9+ — `npm install -g pnpm` or see [pnpm.io](https://pnpm.io/installation)
 - **C/C++ toolchain + Python 3** — native modules (`better-sqlite3`) compile from source when no prebuilt binary matches your Node version. On Debian/Ubuntu: `sudo apt-get install build-essential python3`. On macOS: Xcode Command Line Tools (`xcode-select --install`).
+- **Rust toolchain** (`cargo`) — the `@ontofelia/reasoner` N-API addon is compiled from source (`packages/reasoner/src/lib.rs`) during `pnpm build`; its binary is not committed to the repo. Install via [rustup.rs](https://rustup.rs). The one-command installer below does this for you.
 
 > The default triplestore is **Oxigraph**, an embedded npm dependency — no
 > Java and no separate server download are required.

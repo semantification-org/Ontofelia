@@ -17,6 +17,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3 build-essential
 
+      # The @ontofelia/reasoner native addon is compiled from src/lib.rs at
+      # build time — its .node binary is no longer committed — so CI needs a
+      # Rust toolchain. rust-cache keeps the ~1-2 min cargo build off the hot
+      # path on unchanged branches.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/reasoner
+
       # pnpm version comes from package.json "packageManager" (pnpm@9.0.0).
       # Do NOT also set `version:` here — action-setup@v4 errors on a conflict.
       - uses: pnpm/action-setup@v4
