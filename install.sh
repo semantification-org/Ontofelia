@@ -369,6 +369,33 @@ fi
 
 ok "All dependencies installed"
 
+# ── Native binary guard ───────────────────────────────────────────────────
+# The gateway needs better-sqlite3's compiled native binding
+# (better_sqlite3.node). On a cold pnpm store a misconfigured build-allow list
+# can silently skip the native build, and the installer would otherwise report
+# success while the gateway cannot start ("Could not locate the bindings file").
+# Verify the binary exists; if not, force a rebuild and fail loudly if it still
+# does not appear.
+verify_native_binaries() {
+  local sqlite_binding
+  sqlite_binding=$(find "$SCRIPT_DIR/node_modules" -name "better_sqlite3.node" -size +0c 2>/dev/null | head -1)
+  if [ -z "$sqlite_binding" ]; then
+    warn "better-sqlite3 native binary missing — rebuilding..."
+    # sharp is also a native dependency used by the gateway; rebuild both.
+    pnpm rebuild better-sqlite3 sharp 2>/dev/null || pnpm rebuild better-sqlite3 || true
+    sqlite_binding=$(find "$SCRIPT_DIR/node_modules" -name "better_sqlite3.node" -size +0c 2>/dev/null | head -1)
+  fi
+  if [ -z "$sqlite_binding" ]; then
+    fail "better-sqlite3 native binary (better_sqlite3.node) could not be built"
+    info "The gateway cannot start without it. Try manually:"
+    info "  cd $SCRIPT_DIR && pnpm rebuild better-sqlite3"
+    exit 1
+  fi
+  ok "Native modules verified ${DIM}(better_sqlite3.node present)${NC}"
+}
+
+verify_native_binaries
+
 # ══════════════════════════════════════════
 # STEP 3: Build
 # ══════════════════════════════════════════

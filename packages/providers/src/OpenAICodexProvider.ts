@@ -14,23 +14,57 @@ export class OpenAICodexProvider implements ProviderAdapter {
 
   // Try to load the saved OAuth token automatically.
   async loadStoredToken(): Promise<string | null> {
+    const auth = await this.loadStoredAuth();
+    return auth ? auth.accessToken : null;
+  }
+
+  // Load the stored access token together with the ChatGPT account id, handling
+  // refresh transparently. Returns null when there is no usable token.
+  async loadStoredAuth(): Promise<{ accessToken: string; accountId?: string } | null> {
     const tokens = await this.tokenStore.load();
     if (!tokens) return null;
-    
+
     if (this.tokenStore.isExpired(tokens)) {
       if (tokens.refreshToken) {
         try {
           const refreshed = await this.oauthPKCE.refreshToken(tokens.refreshToken);
+          // A refresh response may omit the id_token, in which case the freshly
+          // extracted accountId is undefined. Preserve the previously stored one
+          // so we don't lose the header after a silent refresh.
+          if (!refreshed.accountId && tokens.accountId) {
+            refreshed.accountId = tokens.accountId;
+          }
           await this.tokenStore.save(refreshed);
-          return refreshed.accessToken;
+          return { accessToken: refreshed.accessToken, accountId: refreshed.accountId };
         } catch {
           return null;
         }
       }
       return null;
     }
-    
-    return tokens.accessToken;
+
+    return { accessToken: tokens.accessToken, accountId: tokens.accountId };
+  }
+
+  // Build the request headers for the Codex backend. Extracted so it can be
+  // unit-tested without a live fetch. When accountId is missing (e.g. a token
+  // saved before this feature existed), a warning is emitted and the header is
+  // omitted; the call is still attempted.
+  buildCodexHeaders(token: string, accountId?: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+    if (accountId) {
+      headers['chatgpt-account-id'] = accountId;
+    } else {
+      console.warn(
+        '[openai-codex] No ChatGPT account id found for this token. The Codex ' +
+        'backend requires it and will likely return 401. Re-run "ontofelia auth login" ' +
+        'to capture it.'
+      );
+    }
+    return headers;
   }
 
   async healthCheck(): Promise<HealthResult> {
@@ -80,8 +114,16 @@ export class OpenAICodexProvider implements ProviderAdapter {
 
   async *chatStream(request: ChatRequest): AsyncIterable<StreamEvent> {
     let token: string | null | undefined = this.config.oauthToken;
-    if (!token) {
-      token = await this.loadStoredToken();
+    let accountId: string | undefined;
+    if (token) {
+      // A token supplied via config carries no id_token, so we still try to load
+      // the stored auth to recover the account id for the required header.
+      const stored = await this.loadStoredAuth();
+      accountId = stored?.accountId;
+    } else {
+      const stored = await this.loadStoredAuth();
+      token = stored?.accessToken ?? null;
+      accountId = stored?.accountId;
     }
     if (!token) {
       throw new Error('OAuth token is missing. Run "ontofelia onboard" or "ontofelia auth login".');
@@ -125,10 +167,7 @@ export class OpenAICodexProvider implements ProviderAdapter {
     try {
       const res = await fetch('https://chatgpt.com/backend-api/codex/responses', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: this.buildCodexHeaders(token, accountId),
         body: JSON.stringify(body),
         signal: controller.signal
       });

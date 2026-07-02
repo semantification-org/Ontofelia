@@ -8,6 +8,49 @@ export interface OAuthTokens {
   refreshToken?: string;
   expiresAt: string;  // ISO timestamp
   tokenType: string;
+  accountId?: string; // ChatGPT account id, extracted from the id_token JWT
+}
+
+// Decode the ChatGPT account id from an OAuth id_token (a JWT).
+//
+// The id_token is our own token (issued to us by auth.openai.com); we only read
+// a claim from it, so there is NO signature verification here — we just
+// base64url-decode the middle (payload) segment and read the claim.
+//
+// Standard location for ChatGPT OAuth: claim `"https://api.openai.com/auth"` →
+// `chatgpt_account_id`. We check that nested claim first, then fall back to
+// scanning for `chatgpt_account_id` / `account_id` / `organization_id` at the
+// top level. Malformed / missing input returns undefined without throwing.
+export function extractAccountId(idToken: string | undefined | null): string | undefined {
+  if (!idToken || typeof idToken !== 'string') return undefined;
+  try {
+    const parts = idToken.split('.');
+    if (parts.length < 2) return undefined;
+    const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf-8');
+    const claims = JSON.parse(payloadJson) as Record<string, unknown>;
+
+    // Preferred: nested under the OpenAI auth namespace claim.
+    const authClaim = claims['https://api.openai.com/auth'];
+    if (authClaim && typeof authClaim === 'object') {
+      const nested = authClaim as Record<string, unknown>;
+      const nestedId =
+        nested['chatgpt_account_id'] ??
+        nested['account_id'] ??
+        nested['organization_id'];
+      if (typeof nestedId === 'string' && nestedId) return nestedId;
+    }
+
+    // Fallback: top-level claims.
+    const topId =
+      claims['chatgpt_account_id'] ??
+      claims['account_id'] ??
+      claims['organization_id'];
+    if (typeof topId === 'string' && topId) return topId;
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface PKCEConfig {
@@ -227,13 +270,15 @@ export class OAuthPKCE {
       refresh_token?: string;
       expires_in: number;
       token_type: string;
+      id_token?: string;
     };
 
     return {
       accessToken: data.access_token,
       refreshToken: data.refresh_token,
       expiresAt: new Date(Date.now() + data.expires_in * 1000).toISOString(),
-      tokenType: data.token_type
+      tokenType: data.token_type,
+      accountId: extractAccountId(data.id_token)
     };
   }
 
@@ -259,13 +304,15 @@ export class OAuthPKCE {
       refresh_token?: string;
       expires_in: number;
       token_type: string;
+      id_token?: string;
     };
 
     return {
       accessToken: data.access_token,
       refreshToken: data.refresh_token || refreshToken,
       expiresAt: new Date(Date.now() + data.expires_in * 1000).toISOString(),
-      tokenType: data.token_type
+      tokenType: data.token_type,
+      accountId: extractAccountId(data.id_token)
     };
   }
 }
