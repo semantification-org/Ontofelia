@@ -123,12 +123,20 @@ export class ToolExecutor {
 
     try {
       const timeoutMs = tool.timeoutMs || 30000;
-      
-      const executePromise = tool.execute(input, context);
-      
+
+      // The old `Promise.race` rejected the caller on timeout but left the tool
+      // running — dangling child processes, fs writes and network calls. Wire a
+      // real cancellation signal through the ToolContext so cancellation-aware
+      // tools (exec, web_fetch) can actually stop. Honoring it is best-effort:
+      // tools that ignore the signal simply keep the previous behaviour.
+      const abortController = new AbortController();
+      const execContext: ToolContext = { ...context, signal: abortController.signal };
+      const executePromise = tool.execute(input, execContext);
+
       let timeoutId: NodeJS.Timeout;
       const timeoutPromise = new Promise<ToolResult>((_, reject) => {
         timeoutId = setTimeout(() => {
+          abortController.abort();
           reject(new Error(`Tool execution timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       });

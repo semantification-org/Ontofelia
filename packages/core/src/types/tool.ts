@@ -55,6 +55,16 @@ export interface ToolContext {
     pruneIdleHours?: number;
     pruneMaxAgeDays?: number;
   };
+  /**
+   * Cancellation signal wired to the executor's per-call timeout. When a tool
+   * exceeds its `timeoutMs`, the executor aborts this signal so long-running
+   * work (child processes, network requests) can actually stop instead of
+   * leaking past the `Promise.race` that already rejected the caller.
+   *
+   * Honoring the signal is best-effort per tool: cancellation-aware tools
+   * (`exec`, `web_fetch`) observe it; others may ignore it.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ToolCall {

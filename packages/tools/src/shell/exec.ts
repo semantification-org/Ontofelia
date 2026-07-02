@@ -85,7 +85,10 @@ export class ExecTool implements ToolDefinition {
       // process cwd. The previous hard-coded '/workspace' does not exist outside
       // a Docker-sandbox mount and caused `spawn /bin/sh ENOENT`.
       cwd: data.cwd || context.workspacePath || process.cwd(),
-      timeoutMs: data.timeout || 30000
+      timeoutMs: data.timeout || 30000,
+      // Forward the executor's cancellation signal so a tool-timeout actually
+      // kills the child process instead of leaving it running (best-effort).
+      signal: context.signal
     });
     
     return {

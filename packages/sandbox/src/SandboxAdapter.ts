@@ -24,6 +24,12 @@ export interface ExecOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
   user?: string;
+  /**
+   * Cancellation signal. When aborted (e.g. by the executor's tool timeout),
+   * the adapter kills the underlying child process instead of leaving it
+   * running past the caller's rejection.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ExecResult {

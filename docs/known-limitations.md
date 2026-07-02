@@ -87,3 +87,36 @@ composition (family relationships, organizational hierarchies beyond
 reasoning.
 
 **Tracking:** property-chain support in the reasoning layer.
+
+---
+
+## 5. Entity Resolution: Same-Name, Different-Entity Disambiguation
+
+**What:** `KnowledgeEngine.findEntityByLabel()` reuses an existing node
+when its `rdfs:label` matches the incoming name case-insensitively.
+Previously this match ran across ALL graphs with no type check, so two
+genuinely different entities that share a name — the person "Paris" and
+the city "Paris" — were silently merged into one node by `resolveEntity`.
+
+**Why:** Merging distinct referents corrupts the graph: facts about the
+person and the city accumulate on the same URI, and no later query can
+separate them again.
+
+**Current status:** Fixed with a conservative, type-aware guard. When a
+`type` is supplied, `resolveEntity` now only reuses a label match that is
+type-compatible — either already an instance of the target class, or
+carrying no declared type. If the only same-label match has a *different*
+declared type, a fresh, disambiguated URI is minted instead (the slug URI
+plus a type suffix, e.g. `…:entity:Paris_Person`). Behaviour is unchanged
+when no type is passed. Regression tests in
+`EntityTypeDisambiguation.test.ts`.
+
+**Residual risk:** Disambiguation is by declared type only — this is not
+a full entity-resolution / coreference system. Two entities of the *same*
+type that share a name (two different people both called "Alex Müller")
+are still merged, and two mentions of the *same* real-world entity under
+different names are not linked. Type comparison is exact-class (no
+subclass tolerance), so a match typed only with a super-/subclass of the
+requested class is treated as a conflict and gets a fresh URI rather than
+being reused. Genuine disambiguation across same-type homonyms is planned
+for a later entity-resolution pass.
