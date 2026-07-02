@@ -46,12 +46,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
 
-      # Install only the reasoner's dependency subtree (@napi-rs/cli). A full
-      # workspace install would compile better-sqlite3 from source on the
-      # Windows runner (no prebuilt for its Node version), where the node-gyp
-      # bundled with pnpm cannot detect the runner's Visual Studio toolchain.
-      - name: Install dependencies (reasoner only)
-        run: pnpm install --frozen-lockfile --filter "@ontofelia/reasoner..."
+      # The addon build only needs @napi-rs/cli (build.mjs invokes the napi
+      # CLI directly), so skip all lifecycle scripts: a full script-running
+      # install would compile better-sqlite3 from source on the Windows runner
+      # (no prebuilt for its Node version), where the node-gyp bundled with
+      # pnpm cannot detect the runner's Visual Studio toolchain. The --filter
+      # narrows the install where supported; the pinned pnpm 9.0.0 ignores it
+      # under --frozen-lockfile, hence --ignore-scripts is the load-bearing flag.
+      - name: Install dependencies (no lifecycle scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter "@ontofelia/reasoner..."
 
       # Build only the reasoner package. With no committed .node present,
       # scripts/build.mjs compiles the addon via `napi build --release`.
