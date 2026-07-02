@@ -21,7 +21,7 @@ export class WebFetchTool implements ToolDefinition {
     required: ['url']
   };
 
-  async execute(input: unknown, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
     const data = input as WebFetchInput;
     const startTime = Date.now();
     const maxLen = data.maxLength || 8000;
@@ -29,6 +29,14 @@ export class WebFetchTool implements ToolDefinition {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
+
+      // Also abort on the executor's cancellation signal (tool timeout), so a
+      // slow fetch is torn down instead of running past the caller's rejection.
+      const onExecutorAbort = () => controller.abort();
+      if (context.signal) {
+        if (context.signal.aborted) controller.abort();
+        else context.signal.addEventListener('abort', onExecutorAbort, { once: true });
+      }
 
       const res = await fetch(data.url, {
         headers: {
@@ -39,6 +47,7 @@ export class WebFetchTool implements ToolDefinition {
         redirect: 'follow',
       });
       clearTimeout(timeout);
+      context.signal?.removeEventListener('abort', onExecutorAbort);
 
       if (!res.ok) {
         return {

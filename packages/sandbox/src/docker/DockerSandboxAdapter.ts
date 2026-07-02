@@ -115,7 +115,9 @@ export class DockerSandboxAdapter implements SandboxAdapter {
 
     const startTime = Date.now();
     try {
-      const { stdout, stderr } = await execFileAsync('docker', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 10 });
+      // `signal` lets the executor's tool-timeout kill the `docker exec` client
+      // instead of leaving it (and the caller's Promise.race) dangling.
+      const { stdout, stderr } = await execFileAsync('docker', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 10, signal: options?.signal });
       return {
         exitCode: 0,
         stdout: stdout,

@@ -50,10 +50,13 @@ export class NoopSandboxAdapter implements SandboxAdapter {
     
     const startTime = Date.now();
     try {
-      const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', command], { 
-        timeout: timeoutMs, 
+      const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', command], {
+        timeout: timeoutMs,
         cwd,
-        env: { ...process.env, ...options?.env }
+        env: { ...process.env, ...options?.env },
+        // `signal` lets the executor's tool-timeout actually kill the child
+        // process instead of leaving it running past the caller's rejection.
+        signal: options?.signal
       });
       
       return {
