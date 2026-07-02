@@ -10,7 +10,7 @@ An open-source, self-hosted agent gateway that gives your AI a persistent identi
 
 [![CI](https://github.com/semantification-org/Ontofelia/actions/workflows/ci.yml/badge.svg)](https://github.com/semantification-org/Ontofelia/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178c6.svg)](https://typescriptlang.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6.svg)](https://typescriptlang.org)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg)](https://nodejs.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -292,6 +292,7 @@ ontofelia/
 │   ├── agent-runtime/       # LLM orchestration, tool loop, sessions
 │   ├── session-store/       # SQLite index + JSONL transcripts
 │   ├── semantic-memory/     # RDF/SPARQL adapters, Oxigraph/Fuseki backends
+│   ├── reasoner/            # OWL reasoner integration (Reasonable)
 │   ├── providers/           # LLM providers (OpenRouter, OpenAI, OAuth)
 │   ├── tools/               # Tool registry, built-in tools, audit log
 │   ├── security/            # Policy engine, RBAC, rate limiting
@@ -302,7 +303,8 @@ ontofelia/
 │   ├── sandbox/             # Docker-based sandboxing
 │   ├── media/               # File storage, thumbnails, signed URLs
 │   ├── nodes/               # WebSocket node protocol for IoT/devices
-│   └── testkit/             # MockProvider & test utilities
+│   ├── testkit/             # MockProvider & test utilities
+│   └── eval/                # Neuro-symbolic evaluation & benchmark harness
 └── docs/                    # Architecture, interfaces, decisions
 ```
 
@@ -310,7 +312,7 @@ ontofelia/
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Language | TypeScript 5.4 (strict) | Shared types across gateway, CLI, and UI |
+| Language | TypeScript 5.7 (strict) | Shared types across gateway, CLI, and UI |
 | Runtime | Node.js 20+ LTS | Modern ESM, native fetch, stable |
 | HTTP | Fastify 5 + WebSocket | High performance, schema validation |
 | CLI | Commander.js 13 | Battle-tested, zero config |
@@ -346,7 +348,7 @@ ontofelia/
 # Build all packages
 pnpm build
 
-# Run all tests (42 test suites)
+# Run all tests (70+ test suites)
 pnpm test
 
 # Lint everything
@@ -361,9 +363,9 @@ pnpm --filter @ontofelia/tools test
 
 ### Project Stats
 
-- **19 packages** in the monorepo
-- **~9,000 lines** of TypeScript
-- **42 test suites** with full coverage of core modules
+- **21 workspace packages** in the monorepo (18 libraries + 3 apps)
+- **~35,000 lines** of TypeScript (~27,000 excluding tests)
+- **70+ test suites** (Vitest) covering the core modules
 - **0 external LLM dependencies** — bring your own provider
 
 ## 🗺 Roadmap
@@ -414,7 +416,9 @@ Ontofelia is open source software licensed under the [Apache License 2.0](LICENS
 
 ## 🙏 Acknowledgments
 
-- [Apache Jena](https://jena.apache.org/) — the backbone of our semantic memory
+- [Oxigraph](https://github.com/oxigraph/oxigraph) — the embedded RDF triplestore at the heart of our semantic memory
+- [Reasonable](https://github.com/gtfierro/reasonable) — the Rust OWL reasoner powering inference
+- [Apache Jena / Fuseki](https://jena.apache.org/) — the optional legacy triplestore backend
 - [OpenRouter](https://openrouter.ai/) — affordable access to the best LLMs
 - [Fastify](https://fastify.dev/) — blazing fast HTTP framework
 - [N3.js](https://github.com/rdfjs/N3.js) — RDF processing in JavaScript
