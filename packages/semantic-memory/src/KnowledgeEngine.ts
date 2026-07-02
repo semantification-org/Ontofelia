@@ -168,26 +168,92 @@ export class KnowledgeEngine {
   }
 
   /**
-   * Find an existing entity whose rdfs:label matches `name` case-insensitively.
+   * Find an existing entity whose rdfs:label matches `name` case-insensitively,
+   * optionally constrained by the target `type`.
+   *
    * This prevents "Berlin"/"berlin" or "User"/"user" from becoming separate
-   * nodes. Returns the existing URI, or null if none matches.
+   * nodes. But a purely name-based match across ALL graphs silently merged
+   * distinct entities that happen to share a name — the person "Paris" and the
+   * city "Paris" collapsed into one node. When a `type` is supplied we therefore
+   * only reuse a match that is *type-compatible*: it is already an instance of
+   * the target class, or it carries no declared type (so there is no conflict).
+   *
+   * Returns:
+   *   - `{ uri }`        — a reusable, type-compatible existing node.
+   *   - `{ conflict }`   — a same-label node exists but with a DIFFERENT type;
+   *                        the caller must mint a fresh, disambiguated URI
+   *                        instead of merging the two.
+   *   - `null`           — no label match at all.
    */
-  private async findEntityByLabel(name: string): Promise<string | null> {
+  private async findEntityByLabel(
+    name: string,
+    type?: string,
+  ): Promise<{ uri: string } | { conflict: true } | null> {
     const needle = this.escapeLiteral(name.trim().toLowerCase());
     try {
       const res = await this.triplestore.query(`
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        SELECT ?e WHERE {
+        SELECT ?e ?t WHERE {
           GRAPH ?g { ?e rdfs:label ?l }
+          OPTIONAL { GRAPH ?tg { ?e a ?t } }
           FILTER(LCASE(STR(?l)) = "${needle}")
-        } LIMIT 1
+        } LIMIT 50
       `);
-      if (res.type === 'bindings' && res.bindings && res.bindings.length > 0) {
-        const e = res.bindings[0]['e'];
-        return e && e.type === 'uri' ? e.value : null;
+      if (res.type !== 'bindings' || !res.bindings || res.bindings.length === 0) {
+        return null;
       }
+
+      // Group the (entity, type) rows by entity so each candidate carries the
+      // full set of its declared types.
+      const candidates = new Map<string, Set<string>>();
+      for (const row of res.bindings) {
+        const e = row['e'];
+        if (!e || e.type !== 'uri') continue;
+        if (!candidates.has(e.value)) candidates.set(e.value, new Set());
+        const t = row['t'];
+        if (t && t.type === 'uri') candidates.get(e.value)!.add(t.value);
+      }
+      if (candidates.size === 0) return null;
+
+      // No type constraint → keep the original behaviour (reuse first match).
+      if (!type) {
+        return { uri: candidates.keys().next().value! };
+      }
+
+      const classUri = this.typeToClassUri(type);
+      // Prefer a match that is already an instance of the target class.
+      for (const [uri, types] of candidates) {
+        if (types.has(classUri)) return { uri };
+      }
+      // Next best: an untyped match — reusing it introduces no type conflict.
+      for (const [uri, types] of candidates) {
+        if (types.size === 0) return { uri };
+      }
+      // Only differently-typed matches remain: reusing one would merge distinct
+      // entities (person "Paris" vs city "Paris"). Signal a conflict instead.
+      return { conflict: true };
     } catch { /* fall through to slug-based URI */ }
     return null;
+  }
+
+  /**
+   * Mint a fresh entity URI for `name` that does not collide with an existing,
+   * differently-typed entity. The plain slug URI is used when it is free; when
+   * it is already taken (by the conflicting entity) a type-derived suffix — and,
+   * if necessary, a counter — is appended.
+   */
+  private async mintDisambiguatedUri(name: string, type?: string): Promise<string> {
+    const base = this.toEntityUri(name);
+    const isTaken = (u: string) => this.triplestore.ask(`ASK { GRAPH ?g { <${u}> a ?t } }`);
+    if (!(await isTaken(base))) return base;
+
+    const suffix = type ? '_' + encodeURIComponent(type.trim().replace(/\s+/g, '_')) : '';
+    let candidate = suffix ? `${base}${suffix}` : `${base}_2`;
+    let n = 2;
+    while (await isTaken(candidate)) {
+      candidate = `${base}${suffix}_${n++}`;
+    }
+    return candidate;
   }
 
   /**
@@ -195,8 +261,11 @@ export class KnowledgeEngine {
    *
    * Resolution order:
    *   1. `canonicalUri` — caller already knows the identity (e.g. the user).
-   *   2. label match    — an entity with the same label (case-insensitive)
-   *      already exists; reuse it instead of minting a duplicate node.
+   *   2. label match    — a *type-compatible* entity with the same label
+   *      (case-insensitive) already exists; reuse it instead of minting a
+   *      duplicate node. A same-label but differently-typed entity is NOT
+   *      reused — a disambiguated URI is minted so "Paris (person)" and
+   *      "Paris (city)" stay distinct.
    *   3. slug URI       — derive a fresh URI from the name.
    */
   async resolveEntity(
@@ -205,9 +274,19 @@ export class KnowledgeEngine {
     agentGraph?: string,
     canonicalUri?: string
   ): Promise<{ uri: string; isNew: boolean }> {
-    const uri = canonicalUri
-      ?? (await this.findEntityByLabel(name))
-      ?? this.toEntityUri(name);
+    let uri: string;
+    if (canonicalUri) {
+      uri = canonicalUri;
+    } else {
+      const match = await this.findEntityByLabel(name, type);
+      if (match && 'uri' in match) {
+        uri = match.uri;
+      } else if (match && 'conflict' in match) {
+        uri = await this.mintDisambiguatedUri(name, type);
+      } else {
+        uri = this.toEntityUri(name);
+      }
+    }
 
     // Check if entity already exists anywhere
     const exists = await this.triplestore.ask(`ASK { GRAPH ?g { <${uri}> a ?type } }`);

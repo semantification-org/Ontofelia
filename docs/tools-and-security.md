@@ -94,6 +94,16 @@ tools: {
 
 Ontofelia implements a human-in-the-loop approval flow for potentially dangerous tools.
 
+> **Guardian is defense-in-depth, not the security boundary.** The `GuardianPolicy`
+> heuristics are a best-effort regex blocklist that escalate common destructive or
+> exfiltration-shaped `exec`/`cron_manage` payloads (recursive deletes, pipe-to-shell,
+> inline interpreter payloads, disk-wipes, etc.) to owner approval. Because shell syntax
+> is endlessly rewritable (quoting, encoding, variable expansion), an adversarial model
+> **can** bypass these patterns — so they must never be relied on as a sandbox. The hard
+> boundary is the default-deny `ToolPolicyEngine` (`packages/security`), where `exec` and
+> other dangerous tools require explicit allow-listing, backed by the sandbox that confines
+> execution. Guardian simply adds a second, human-visible speed bump on top.
+
 ### Tool Policy Configuration
 Every tool invocation is evaluated against `config.tools`. Tools listed in `config.tools.deny` are strictly blocked.
 By default, dangerous tools (`exec`, `cron_manage`, `fs_write`, `memory_query`, `memory_retract`, `ontology_propose`) or any tool marked as `hostOnly: true` trigger a `requiresApproval` state unless they are explicitly listed in `config.tools.allow`. Pre-allowing a tool in the allowlist skips the approval process.
