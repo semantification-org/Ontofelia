@@ -8,4 +8,10 @@ export interface Triple {
   predicate: string
   object: string
 }
-export declare function inferTriples(tboxTtl: string, aboxTtl: string): Array<Triple>
+/**
+ * Materializes the OWL 2 RL closure of `tbox_ttl` + `abox_ttl`.
+ *
+ * Returns a `Promise` (via napi `AsyncTask`) so callers `await` it and the
+ * event loop stays responsive; the actual reasoning runs off-thread.
+ */
+export declare function inferTriples(tboxTtl: string, aboxTtl: string): Promise<Array<Triple>>
