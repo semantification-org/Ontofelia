@@ -37,20 +37,11 @@ Skills are lightweight extensions that add domain-specific capabilities to the a
 
 ### Using Skills
 
-Skills are activated via chat commands or configuration:
+Skills are activated via chat commands:
 
 ```
 User: /skill research "history of semantic web"
 Agent: [Activates research skill, queries memory, fetches sources...]
-```
-
-Or always-on:
-
-```json5
-// In agent config
-agents: [{
-  skills: ["summarize", "translate", "research"]
-}]
 ```
 
 ### Creating a Skill

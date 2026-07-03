@@ -49,12 +49,7 @@ Or configure manually in `ontofelia.json5`:
 channels: {
   telegram: {
     enabled: true,
-    accounts: {
-      default: {
-        token: "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
-      }
-    },
-    dmPolicy: "pairing"
+    token: "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
   }
 }
 ```
@@ -89,7 +84,7 @@ If the LLM response contains invalid Markdown that Telegram can't parse, the mes
 
 ### Pairing
 
-With `dmPolicy: "pairing"`, new users must be approved:
+New users must be approved before they can chat:
 
 1. User sends any message to the bot
 2. Bot responds: "Please send /pair to start a pairing request"
@@ -98,14 +93,7 @@ With `dmPolicy: "pairing"`, new users must be approved:
 5. Admin approves: `ontofelia pairing approve <code>`
 6. User can now chat with the agent
 
-### DM Policies
-
-| Policy | Behavior |
-|--------|----------|
-| `pairing` | New users need explicit approval (recommended) |
-| `allowlist` | Only users in the allowlist can chat |
-| `open` | Anyone can chat (not recommended for production) |
-| `disabled` | No DMs accepted |
+Approved users are stored in the allowlist (`ontofelia allowlist list`); users can also be added directly with `ontofelia allowlist add`.
 
 ## Discord
 
@@ -120,21 +108,14 @@ With `dmPolicy: "pairing"`, new users must be approved:
 channels: {
   discord: {
     enabled: true,
-    accounts: {
-      default: {
-        token: "your-bot-token"
-      }
-    },
-    dmPolicy: "pairing",
-    mentionGating: true,
-    mentionPatterns: ["@Ontofelia"]
+    token: "your-bot-token"
   }
 }
 ```
 
 ### Mention Gating
 
-When `mentionGating` is enabled, the bot only responds in group channels when mentioned. This prevents it from responding to every message in a busy server.
+In server (guild) channels the bot only responds when mentioned. This prevents it from responding to every message in a busy server. DMs need no mention.
 
 ## System Channel
 

@@ -11,29 +11,33 @@ pnpm build
 node apps/cli/dist/index.js <command>
 ```
 
-For convenience, create an alias:
+For convenience, create an alias (`install.sh` instead puts an `ontofelia` wrapper script on your `PATH`):
 
 ```bash
 alias ontofelia="node $(pwd)/apps/cli/dist/index.js"   # run from your Ontofelia clone
 ```
 
+Run `ontofelia --help` (or `ontofelia <command> --help`) at any time for the authoritative command surface.
+
 ## Commands
 
-### `ontofelia init`
+### `ontofelia onboard`
 
-Initialize a new Ontofelia installation. Creates `~/.ontofelia/` with default configuration.
+Interactive setup. Creates `~/.ontofelia/` with configuration, gateway token, and workspace bootstrap files.
 
 ```bash
-ontofelia init
+ontofelia onboard
+ontofelia onboard --non-interactive   # no prompts; uses defaults with the mock provider
 ```
 
-This creates:
-- `~/.ontofelia/ontofelia.json5` — configuration file
-- `~/.ontofelia/workspace/` — agent workspace with bootstrap files (SOUL.md, etc.)
-- Gateway authentication token
+The wizard walks you through:
+1. Prerequisite checks (Node.js ≥ 20; Java only if you pick the legacy Fuseki backend)
+2. LLM provider (OpenAI via OAuth, OpenAI API key, OpenRouter, or others)
+3. Network mode (loopback or LAN) — a gateway token is always generated
+4. Knowledge graph backend (Oxigraph embedded — recommended, Fuseki, or in-memory)
+5. File creation: `~/.ontofelia/ontofelia.json5` plus `workspace/` (SOUL.md, IDENTITY.md, USER.md)
 
-Options:
-- `--force` — overwrite existing configuration
+With `--non-interactive`, steps 2–4 are skipped: the provider is set to `mock` and all other settings use defaults. Configure a real provider afterwards with `ontofelia model`.
 
 ---
 
@@ -42,12 +46,15 @@ Options:
 Manage the Ontofelia gateway server.
 
 ```bash
-ontofelia gateway start         # Start in background (daemonized)
+ontofelia gateway start         # Start in background (also the default: `ontofelia gateway`)
 ontofelia gateway stop          # Stop the running gateway
-ontofelia gateway restart       # Restart the gateway
+ontofelia gateway restart       # Restart the gateway (runs in foreground afterwards)
 ontofelia gateway run           # Run in foreground (for systemd)
-ontofelia gateway --install-daemon  # Install as systemd service
 ```
+
+`gateway start` options: `--port <port>`, `--bind <mode>`, `--token <token>`, `--foreground`.
+
+In background mode the PID is written to `~/.ontofelia/gateway.pid` and logs go to `~/.ontofelia/logs/gateway.log`.
 
 The gateway starts:
 - HTTP/WebSocket server on port 18780
@@ -60,40 +67,42 @@ The gateway starts:
 
 ### `ontofelia status`
 
-Show gateway status and health information.
+Show gateway status (from the PID file plus `GET /api/status`).
 
 ```bash
 ontofelia status
+ontofelia status --json
 ```
 
-Output:
-```
-Ontofelia Status
+Reports gateway process state, uptime and version, agents running, channels connected, the knowledge graph backend with its triple count, the Web UI URL, and the gateway token.
 
-  Gateway:    ✔ Running (PID 12345)
-  Uptime:     2h 15m
-  Port:       18780
-  Provider:   openrouter (openai/gpt-oss-120b:free)
-  Memory:     oxigraph (embedded, 342 triples)
-  Channels:   webchat ✔, telegram ✔
+---
+
+### `ontofelia health`
+
+Quick health check against `GET /api/health` (works without the token).
+
+```bash
+ontofelia health
+ontofelia health --json
 ```
 
 ---
 
 ### `ontofelia doctor`
 
-Run diagnostic checks on the installation.
+Check (and optionally repair) the configuration.
 
 ```bash
 ontofelia doctor
+ontofelia doctor --repair    # merge missing keys back in from the defaults
 ```
 
 Checks:
-- Node.js version (requires ≥ 20)
-- Config file validity
-- Triplestore: Oxigraph data directory writable (or Fuseki + Java 17+ if `backend = "fuseki"`)
-- Provider authentication
-- Workspace file integrity
+- Config file parses as JSON5 and validates against the schema
+- Session store and workspace directories exist
+- Fuseki triplestore reachable (only meaningful with the Fuseki backend)
+- Docker available (needed for sandboxing)
 
 ---
 
@@ -105,11 +114,7 @@ Interactive wizard to configure Telegram and Discord channels.
 ontofelia channel
 ```
 
-The wizard guides you through:
-1. Choosing Telegram or Discord
-2. Entering and validating the bot token
-3. Setting DM policy (pairing, allowlist, open)
-4. Saving to `ontofelia.json5`
+The wizard guides you through choosing Telegram or Discord, entering the bot token, and saving to `ontofelia.json5`. Restart the gateway afterwards. New Telegram/Discord users must pair and be approved (see `pairing`).
 
 ---
 
@@ -134,24 +139,16 @@ Manage the list of approved channel users.
 
 ```bash
 ontofelia allowlist list                   # Show all approved users
-ontofelia allowlist list telegram           # Filter by channel
-```
-
----
-
-### `ontofelia config show`
-
-Display the current configuration (with sensitive values masked).
-
-```bash
-ontofelia config show
+ontofelia allowlist list telegram          # Filter by channel
+ontofelia allowlist add <channel> <id> --name <name>   # Add a user directly
+ontofelia allowlist remove <channel> <id>  # Remove a user
 ```
 
 ---
 
 ### `ontofelia provider`
 
-Manage LLM providers.
+Manage the LLM provider.
 
 ```bash
 ontofelia provider status                  # Show current provider + model
@@ -163,104 +160,151 @@ ontofelia provider test "What is 2+2?"     # Send a test message
 
 ### `ontofelia model`
 
-Quick model management.
+Interactive wizard to switch the LLM provider and model. Writes `provider` to `ontofelia.json5`; restart the gateway to apply.
 
 ```bash
-ontofelia model                            # Show current model
-ontofelia model set <model-id>             # Switch model
-ontofelia model list                       # List available models
+ontofelia model
 ```
 
-Note: Models can also be switched in-chat via `/model` command.
+Note: models can also be switched in-chat via the `/model` command.
 
 ---
 
 ### `ontofelia auth`
 
-Manage OpenAI OAuth authentication.
+Manage OpenAI OAuth authentication and the gateway token.
 
 ```bash
 ontofelia auth login                       # Start OAuth PKCE flow
 ontofelia auth status                      # Show auth status
 ontofelia auth logout                      # Remove stored tokens
+ontofelia auth token                       # Print the gateway access token (for the Web UI / API)
 ```
 
 ---
 
-### `ontofelia chat <message>`
-
-Send a message to the agent from the command line.
+### `ontofelia skills` / `ontofelia plugins`
 
 ```bash
-ontofelia chat "What's the weather like today?"
-```
-
-Options:
-- `--agent <id>` — target a specific agent (default: `default`)
-- `--session <id>` — use a specific session
-
----
-
-### `ontofelia sessions`
-
-Manage sessions.
-
-```bash
-ontofelia sessions                         # List all sessions
-ontofelia sessions reset <id>              # Soft reset (clear context)
-ontofelia sessions reset <id> --hard       # Hard reset (delete transcript)
+ontofelia skills list                      # List available skills
+ontofelia plugins list                     # List installed plugins
+ontofelia plugins install <path>           # Install a plugin from a local path
+ontofelia plugins activate <name>
+ontofelia plugins deactivate <name>
 ```
 
 ---
 
-### `ontofelia memory`
+### `ontofelia cron` / `ontofelia webhooks`
 
-Manage the knowledge graph.
+Manage scheduled jobs and inbound webhooks (both talk to the running gateway).
 
 ```bash
-ontofelia memory export --format turtle > knowledge.ttl
-ontofelia memory export --ontology-only > ontology.owl
-ontofelia memory import knowledge.ttl
-ontofelia memory stats
+ontofelia cron list
+ontofelia cron add                         # Interactive: name, cron expression, agent, prompt
+ontofelia cron remove <id>
+ontofelia cron run <id>                    # Trigger a job manually
+
+ontofelia webhooks list
+ontofelia webhooks create                  # Interactive: name, path, auth method, secret
+ontofelia webhooks delete <id>
 ```
 
 ---
 
-### `ontofelia tools list`
+### `ontofelia sandbox`
 
-List all registered tools and their policies.
+Manage Docker sandboxes for tool execution.
 
 ```bash
-ontofelia tools list
+ontofelia sandbox list
+ontofelia sandbox prune --idle <hours> --age <days>
+ontofelia sandbox build                    # Build the sandbox Docker image
 ```
 
 ---
 
-### `ontofelia logs`
+### `ontofelia ontology` / `ontofelia reasoning`
 
-Follow gateway logs in real-time.
+Manage the knowledge graph's ontology and reasoning.
 
 ```bash
-ontofelia logs
-ontofelia logs --level debug
+ontofelia ontology versions                # List ontology versions
+ontofelia ontology proposals               # List evolution proposals
+ontofelia ontology approve <id>            # Approve a proposal
+ontofelia ontology rollback <version>      # Roll back to a version (e.g. v001)
+
+ontofelia reasoning conflicts              # Show detected knowledge conflicts
+ontofelia reasoning reflect                # Trigger a memory reflection manually
 ```
+
+---
+
+### `ontofelia devices`
+
+Manage paired nodes/devices (connected via `/ws/node`).
+
+```bash
+ontofelia devices list
+ontofelia devices approve <code>
+ontofelia devices reject <code>
+```
+
+---
+
+### `ontofelia media`
+
+```bash
+ontofelia media list
+ontofelia media delete <id>
+```
+
+---
+
+### `ontofelia daemon`
+
+Manage Ontofelia as a systemd user service (Linux).
+
+```bash
+ontofelia daemon install                   # Write + enable + start the user unit (enables lingering)
+ontofelia daemon status
+ontofelia daemon logs                      # Follow journalctl output
+ontofelia daemon uninstall
+```
+
+---
+
+### Reset and removal
+
+```bash
+ontofelia data-reset [--yes]               # Delete conversations + knowledge graph; keep LLM/Telegram settings
+ontofelia reset [--yes] [--keep-config]    # Factory reset: all data, re-seeds from bootstrap
+ontofelia rebuild [--no-restart]           # Recompile all packages and restart the gateway
+ontofelia uninstall [--yes] [--keep-data]  # Remove Ontofelia from this system
+```
+
+Both reset commands prompt for confirmation unless `--yes` is given.
 
 ---
 
 ## Chat Commands (In-Session)
 
-These commands are available inside any chat session (Web UI, Telegram, CLI):
+These commands are available inside any chat session (Web UI, Telegram):
 
 | Command | Description |
 |---------|-------------|
 | `/model` | Show available LLMs + switch model (Telegram: inline buttons) |
-| `/model <name>` | Switch to a specific model |
-| `/new` | Start a new session |
-| `/reset` | Soft reset (clear context, keep transcript) |
+| `/model <name>` | Switch to a specific model (persisted to config) |
+| `/new` | Start a new session (archives the current one) |
+| `/reset` | Reset the session (transcript cleared) |
+| `/reset soft` | Soft reset (context cleared, transcript kept) |
 | `/status` | Show agent status |
 | `/tools` | List available tools |
 | `/skills` | List installed skills |
+| `/skill <name> [input]` | Execute a skill |
 | `/plugins` | List installed plugins |
+| `/cog [health\|retain\|consolidate\|scan\|migrate\|debug on\|debug off\|cycles\|explain <cycleId>]` | Cognitive-architecture maintenance and inspection |
+| `/stop` | Stop the agent |
 | `/help` | Show available commands |
 
 ---
@@ -270,6 +314,4 @@ These commands are available inside any chat session (Web UI, Telegram, CLI):
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Configuration error |
-| 3 | Connection error (gateway not running) |
+| 1 | Error (details on stderr) |
