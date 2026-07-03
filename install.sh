@@ -611,7 +611,7 @@ if [ -x "$SCRIPT_DIR/scripts/install-daemon.sh" ]; then
   if "$SCRIPT_DIR/scripts/install-daemon.sh" >/dev/null 2>&1; then
     ok "Always-on supervision installed ${DIM}(cron watchdog + @reboot)${NC}"
   else
-    warn "Could not install cron supervision — the gateway is up, but auto-restart is off"
+    warn "Could not install cron supervision — the gateway is up, but auto-restart is off (see docs/deployment.md, \"Keeping the gateway running\")"
   fi
 fi
 

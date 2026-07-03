@@ -10,6 +10,76 @@ node apps/cli/dist/index.js init
 node apps/cli/dist/index.js gateway
 ```
 
+## Keeping the gateway running
+
+`ontofelia gateway start` backgrounds the gateway (PID file `~/.ontofelia/gateway.pid`, logs in `~/.ontofelia/logs/gateway.log`), but on its own nothing restarts it after a crash or a reboot. Pick **one** of the options below — running two supervisors against the same instance is asking for trouble.
+
+### Cron watchdog (default — what install.sh sets up)
+
+`install.sh` runs `scripts/install-daemon.sh`, which installs two crontab entries, both tagged with a managed-marker comment so re-runs replace only their own lines and leave the rest of your crontab untouched:
+
+```cron
+*/2 * * * * <repo>/scripts/gateway-watchdog.sh >> ~/.ontofelia/logs/watchdog.log 2>&1 # ontofelia-daemon (managed by scripts/install-daemon.sh)
+@reboot <repo>/scripts/gateway-watchdog.sh >> ~/.ontofelia/logs/watchdog.log 2>&1 # ontofelia-daemon (managed by scripts/install-daemon.sh)
+```
+
+Every 2 minutes the watchdog checks `http://127.0.0.1:18780/api/health` (it honours `ONTOFELIA_PORT` and the `gateway.port` from `~/.ontofelia/ontofelia.json5`). While the gateway is healthy it does nothing; when it is down it first terminates a hung instance — two processes must never share the embedded Oxigraph store — and then starts a fresh one.
+
+```bash
+# (Re)install the cron supervision at any time
+bash scripts/install-daemon.sh
+
+# Remove it (only the managed lines are dropped)
+crontab -l | grep -v 'ontofelia-daemon' | crontab -
+```
+
+### systemd user service (alternative, e.g. boxes without cron)
+
+If your host has a user systemd bus, a `--user` unit is the cleaner option. The CLI can set one up for you — it writes the unit, enables it, starts it, and enables lingering in one go:
+
+```bash
+ontofelia daemon install     # also: daemon status | daemon logs | daemon uninstall
+```
+
+Or create the unit by hand:
+
+```ini
+# ~/.config/systemd/user/ontofelia-gateway.service
+[Unit]
+Description=Ontofelia Agent Gateway
+After=network-online.target
+
+[Service]
+Type=simple
+# Adjust the repo path; use the absolute node path (`command -v node`)
+# if node is managed by nvm — user units get a minimal PATH.
+ExecStart=/usr/bin/env node %h/Ontofelia/apps/cli/dist/index.js gateway run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+`gateway run` keeps the process in the foreground so systemd supervises it directly.
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now ontofelia-gateway
+
+# Without lingering, user units stop at logout and only start after login.
+# Enable lingering so the gateway starts at boot and survives logout:
+sudo loginctl enable-linger "$USER"
+```
+
+If you switch to the systemd unit, remove the cron entries first (see above).
+
+For a system-wide deployment under a dedicated service user (recommended for servers), see the [systemd Service](#systemd-service) section below.
+
+### macOS
+
+`install.sh`'s cron path also works on macOS (recent versions may prompt you to grant `cron` Full Disk Access). The more idiomatic alternative is a launchd LaunchAgent in `~/Library/LaunchAgents` with `KeepAlive` running `node <repo>/apps/cli/dist/index.js gateway run` — or simply run `ontofelia gateway start` manually after a reboot.
+
 ## systemd Service
 
 ### Create the service file
