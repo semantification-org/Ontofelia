@@ -4,12 +4,13 @@ Ontofelia supports multiple LLM providers through a unified adapter interface. Y
 
 ## Supported Providers
 
-| Provider | Auth Method | Free Models | Status |
-|----------|-----------|-------------|--------|
-| [OpenRouter](https://openrouter.ai) | API Key | ✅ Yes | **Recommended** |
-| [OpenAI](https://platform.openai.com) | API Key | ❌ No | Stable |
-| OpenAI (ChatGPT Plus/Pro) | OAuth PKCE | ✅ Uses subscription | Stable |
-| Any OpenAI-compatible API | API Key | Varies | Via `baseUrl` override |
+| Provider | Config `name` | Auth Method | Free Models | Status |
+|----------|---------------|-------------|-------------|--------|
+| [OpenRouter](https://openrouter.ai) | `openrouter` | API Key | ✅ Yes | **Recommended** |
+| [OpenAI](https://platform.openai.com) | `openai` | API Key | ❌ No | Stable |
+| OpenAI (ChatGPT Plus/Pro) | `openai-codex` | OAuth PKCE | ✅ Uses subscription | Stable |
+| [Ollama](https://ollama.com) (local) | `ollama` | None | ✅ Local models | Stable |
+| Any OpenAI-compatible API | `custom` | API Key (optional) | Varies | Stable |
 
 ## OpenRouter (Recommended)
 
@@ -133,25 +134,57 @@ User                    Ontofelia CLI              OpenAI Auth
   │◀────────────────────────│                         │
 ```
 
-## Custom / Self-Hosted Providers
+## Ollama (Local)
 
-Any API that follows the OpenAI chat completions format works with Ontofelia:
+Run models fully locally with [Ollama](https://ollama.com) — no API key, no data leaves your machine. Ontofelia talks to Ollama's OpenAI-compatible endpoint.
+
+### Setup
+
+1. Install Ollama and pull a model:
+
+```bash
+ollama pull llama3.2
+```
+
+2. Configure Ontofelia (or pick "Ollama" in `ontofelia onboard`):
 
 ```json5
 provider: {
-  name: "openai",
-  apiKey: "your-key",
-  baseUrl: "http://localhost:11434/v1",  // e.g., Ollama
-  defaultModel: "llama3.2"
+  name: "ollama",
+  baseUrl: "http://localhost:11434/v1",  // optional, this is the default
+  defaultModel: "llama3.2",
+  autoFallback: false  // recommended, see caveats below
+}
+```
+
+No `apiKey` is needed. If your Ollama instance sits behind an authenticating reverse proxy, set `apiKey` and it is sent as a Bearer token.
+
+### Caveats — read before choosing a model
+
+- **Semantic memory depends on model quality.** Fact extraction (the SemanticParser) asks the LLM to return structured JSON. Larger models handle this reliably; small local models (e.g. 3B–8B) often return malformed or empty JSON, in which case Ontofelia stores **fewer or no facts** — chat still works, but the knowledge graph grows slowly or not at all. If memory matters to you, use the largest model your hardware can run.
+- **Tool calling** requires a model that supports it (check the model's page on ollama.com). Without tool support, `memory_store` and other agent tools won't be used.
+- **Auto-fallback defaults are OpenRouter models.** If the primary model returns an empty response and `autoFallback` is not disabled, the built-in fallback list (OpenRouter model IDs) is tried against your Ollama server and will simply fail. Set `autoFallback: false`, or set `fallbackModels` to local models you have pulled.
+
+## Custom / Self-Hosted (OpenAI-Compatible)
+
+Any API that follows the OpenAI chat-completions format works with Ontofelia. Unlike `ollama`, the `custom` provider has no default endpoint — `baseUrl` is required:
+
+```json5
+provider: {
+  name: "custom",
+  baseUrl: "http://localhost:1234/v1",   // required
+  apiKey: "your-key",                    // optional — omit if the server needs none
+  defaultModel: "your-model-id"
 }
 ```
 
 ### Compatible Services
 
-- **Ollama** — `http://localhost:11434/v1`
 - **LM Studio** — `http://localhost:1234/v1`
 - **vLLM** — `http://localhost:8000/v1`
 - **text-generation-webui** — `http://localhost:5000/v1`
+
+The model-quality caveats from the Ollama section apply here too: the semantic parser needs a model strong enough to emit valid JSON, and the default fallback list assumes OpenRouter.
 
 ## Auto-Fallback System
 

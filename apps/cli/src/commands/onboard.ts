@@ -86,18 +86,27 @@ export function registerOnboardCommand(program: Command) {
           
           console.log(chalk.green(`  ✅ Logged in! Token expires at ${tokens.expiresAt}`));
         } else if (providerName !== 'ollama') {
-          // API Key
+          // API Key (optional for custom endpoints — local servers often need none)
           const apiKey = await input({
-            message: `Enter your ${providerName === 'openrouter' ? 'OpenRouter' : providerName === 'openai' ? 'OpenAI' : 'API'} key:`,
-            validate: (v) => v.trim().length > 0 ? true : 'API key is required'
+            message: providerName === 'custom'
+              ? 'Enter your API key (leave empty if none):'
+              : `Enter your ${providerName === 'openrouter' ? 'OpenRouter' : 'OpenAI'} key:`,
+            validate: (v) => providerName === 'custom' || v.trim().length > 0 ? true : 'API key is required'
           });
-          config.provider.apiKey = apiKey.trim();
+          if (apiKey.trim()) config.provider.apiKey = apiKey.trim();
         }
         
-        // Base URL for custom provider
-        if (providerName === 'custom') {
+        // Base URL for local/custom providers
+        if (providerName === 'ollama') {
           const baseUrl = await input({
-            message: 'Base URL of the API (e.g. http://localhost:11434/v1):',
+            message: 'Ollama API base URL:',
+            default: 'http://localhost:11434/v1',
+            validate: (v) => v.trim().startsWith('http') ? true : 'Must be a valid URL'
+          });
+          config.provider.baseUrl = baseUrl.trim();
+        } else if (providerName === 'custom') {
+          const baseUrl = await input({
+            message: 'Base URL of the API (e.g. http://localhost:1234/v1):',
             validate: (v) => v.trim().startsWith('http') ? true : 'Must be a valid URL'
           });
           config.provider.baseUrl = baseUrl.trim();

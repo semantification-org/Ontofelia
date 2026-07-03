@@ -124,7 +124,7 @@ EVAL_PROVIDER=openrouter EVAL_MODELS="deepseek/deepseek-v4-flash,openai/gpt-4o-m
 - Provenance tracking — every triple knows when/where/how it was learned
 
 ### 🤖 Agent Runtime
-- **Multi-provider LLM support** — OpenRouter, OpenAI (API key + OAuth/ChatGPT Plus), any OpenAI-compatible API
+- **Multi-provider LLM support** — OpenRouter, OpenAI (API key + OAuth/ChatGPT Plus), Ollama (local), any OpenAI-compatible API
 - Autonomous **tool-calling loop** with up to 100 rounds per conversation turn (autonomy budget)
 - **Token streaming** — real-time token-by-token responses via WebSocket
 - **Intelligent LLM fallback** — automatic retry with configurable backup models on empty responses
@@ -227,7 +227,8 @@ node apps/cli/dist/index.js gateway start
 ### Configure an LLM Provider
 
 The memory and reasoner layers work without an LLM key, but to use the
-chat/LLM path you must **bring your own API key**.
+chat/LLM path you must **bring your own API key** — or run a local model
+via Ollama (no key needed).
 
 The `onboard` wizard writes your config to `~/.ontofelia/ontofelia.json5`.
 You can also set the key via environment variable (see `.env.example` at the
@@ -256,6 +257,11 @@ The provider section looks like this:
 
 The fastest way to get started is [OpenRouter](https://openrouter.ai) — it
 offers free-tier models so you can try Ontofelia without spending anything.
+
+Prefer fully local? Pick **Ollama** in the wizard (`name: "ollama"`, no API
+key, default `baseUrl` `http://localhost:11434/v1`). Note that small local
+models often struggle with the structured JSON the semantic memory pipeline
+needs — see [LLM Providers](docs/providers.md) for honest caveats.
 
 Restart the gateway after changing the config.
 
@@ -350,7 +356,7 @@ ontofelia/
 | [Tools & Security](docs/tools-and-security.md) | Tool system, policies, sandboxing |
 | [Channels](docs/channels.md) | Multi-channel setup (Telegram, Discord, etc.) |
 | [Skills & Plugins](docs/skills-and-plugins.md) | Extending Ontofelia with custom capabilities |
-| [LLM Providers](docs/providers.md) | Configuring OpenRouter, OpenAI, OAuth |
+| [LLM Providers](docs/providers.md) | Configuring OpenRouter, OpenAI, OAuth, Ollama |
 | [API Reference](docs/api.md) | HTTP and WebSocket API documentation |
 | [CLI Reference](docs/cli.md) | All CLI commands |
 | [Deployment](docs/deployment.md) | Production deployment guide |
