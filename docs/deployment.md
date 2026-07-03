@@ -35,7 +35,13 @@ crontab -l | grep -v 'ontofelia-daemon' | crontab -
 
 ### systemd user service (alternative, e.g. boxes without cron)
 
-If your host has a user systemd bus, a `--user` unit is the cleaner option:
+If your host has a user systemd bus, a `--user` unit is the cleaner option. The CLI can set one up for you — it writes the unit, enables it, starts it, and enables lingering in one go:
+
+```bash
+ontofelia daemon install     # also: daemon status | daemon logs | daemon uninstall
+```
+
+Or create the unit by hand:
 
 ```ini
 # ~/.config/systemd/user/ontofelia-gateway.service
@@ -67,6 +73,8 @@ sudo loginctl enable-linger "$USER"
 ```
 
 If you switch to the systemd unit, remove the cron entries first (see above).
+
+For a system-wide deployment under a dedicated service user (recommended for servers), see the [systemd Service](#systemd-service) section below.
 
 ### macOS
 
