@@ -6,8 +6,8 @@ This guide covers deploying Ontofelia in production environments.
 
 ```bash
 pnpm install && pnpm build
-node apps/cli/dist/index.js init
-node apps/cli/dist/index.js gateway
+node apps/cli/dist/index.js onboard
+node apps/cli/dist/index.js gateway start
 ```
 
 ## Keeping the gateway running
@@ -96,11 +96,10 @@ Type=simple
 User=ontofelia
 Group=ontofelia
 WorkingDirectory=/opt/ontofelia
-ExecStart=/usr/bin/node apps/cli/dist/index.js gateway
+ExecStart=/usr/bin/node apps/cli/dist/index.js gateway run
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
-Environment=ONTOFELIA_HOME=/home/ontofelia/.ontofelia
 
 # Security hardening
 NoNewPrivileges=true
@@ -124,7 +123,7 @@ sudo cp -r . /opt/ontofelia
 sudo chown -R ontofelia:ontofelia /opt/ontofelia
 
 # Initialize
-sudo -u ontofelia node /opt/ontofelia/apps/cli/dist/index.js init
+sudo -u ontofelia node /opt/ontofelia/apps/cli/dist/index.js onboard
 
 # Enable and start
 sudo systemctl enable ontofelia
@@ -153,7 +152,6 @@ services:
       - ontofelia-data:/home/node/.ontofelia
     environment:
       - NODE_ENV=production
-      - ONTOFELIA_HOME=/home/node/.ontofelia
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:18780/api/health"]
@@ -190,10 +188,10 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
 # Initialize
-RUN node apps/cli/dist/index.js init
+RUN node apps/cli/dist/index.js onboard --non-interactive
 
 EXPOSE 18780
-CMD ["node", "apps/cli/dist/index.js", "gateway"]
+CMD ["node", "apps/cli/dist/index.js", "gateway", "run"]
 ```
 
 ## Reverse Proxy (nginx)
@@ -225,7 +223,7 @@ server {
 }
 ```
 
-> **Important:** When exposing Ontofelia to the network, update `gateway.bind` to `"0.0.0.0"` in your config and ensure token authentication is enforced.
+> **Important:** When the reverse proxy runs on the same host, keep `gateway.bind` at `"loopback"`. Only switch it to `"lan"` (listens on all interfaces) when the gateway itself must be reachable over the network — a token is then mandatory.
 
 ## SSH Tunnel (Simplest Remote Access)
 
@@ -245,7 +243,7 @@ Ontofelia works perfectly over Tailscale or any VPN:
 ```json5
 // Bind to all interfaces (safe because Tailscale handles auth)
 gateway: {
-  bind: "0.0.0.0",
+  bind: "lan",
   port: 18780
 }
 ```
@@ -258,10 +256,8 @@ gateway: {
 |------|---------|----------|
 | `~/.ontofelia/ontofelia.json5` | Configuration | Critical |
 | `~/.ontofelia/auth.json` | OAuth tokens | Important |
-| `~/.ontofelia/data/sessions.db` | Session index | Important |
-| `~/.ontofelia/data/transcripts/` | Chat history | Important |
-| `~/.ontofelia/oxigraph/` | Knowledge graph (default backend) | **Critical** |
-| `~/.ontofelia/fuseki/data/` | Knowledge graph (only if Fuseki backend) | **Critical** |
+| `~/.ontofelia/agents/` | Session index + chat transcripts | Important |
+| `~/.ontofelia/triplestore/` | Knowledge graph (Oxigraph by default) | **Critical** |
 | `~/.ontofelia/workspace/` | Agent workspace | Important |
 
 ### Backup Script
@@ -276,10 +272,9 @@ systemctl stop ontofelia
 
 # Copy critical data
 cp -r ~/.ontofelia/ontofelia.json5 "$BACKUP_DIR/"
-cp -r ~/.ontofelia/data/ "$BACKUP_DIR/data/"
-# Knowledge graph: default is Oxigraph (embedded). Use the path for whichever backend is active.
-[ -d ~/.ontofelia/oxigraph ] && cp -r ~/.ontofelia/oxigraph/ "$BACKUP_DIR/oxigraph/"
-[ -d ~/.ontofelia/fuseki/data ] && cp -r ~/.ontofelia/fuseki/data/ "$BACKUP_DIR/fuseki-data/"
+cp -r ~/.ontofelia/agents/ "$BACKUP_DIR/agents/"
+# Knowledge graph (contains the data of whichever backend is active)
+cp -r ~/.ontofelia/triplestore/ "$BACKUP_DIR/triplestore/"
 cp -r ~/.ontofelia/workspace/ "$BACKUP_DIR/workspace/"
 
 # Restart
@@ -319,8 +314,8 @@ Before running Ontofelia in a production environment or exposing it to the inter
 - [ ] **Docker Sandboxing:** Ensure `sandbox.scope` is set to `"session"` or `"agent"` in `ontofelia.json5`. Avoid `scope: "off"` (NoopSandbox) in production.
 - [ ] **Tool Allowlist:** Only enable the exact host-tools required. Explicitly set `tools.deny` for highly sensitive tools like `exec` if they are not needed.
 - [ ] **Reverse Proxy & SSL:** Place Ontofelia behind a reverse proxy (e.g., Nginx or Caddy) with an SSL/TLS certificate (HTTPS/WSS).
-- [ ] **Network Binding:** Keep `gateway.bind` at `"127.0.0.1"` if using a reverse proxy on the same host, or use a secure VPN like Tailscale if binding to `"0.0.0.0"`.
+- [ ] **Network Binding:** Keep `gateway.bind` at `"loopback"` if using a reverse proxy on the same host, or use a secure VPN like Tailscale if binding to `"lan"`.
 - [ ] **Token Authentication:** Do not share the `ontofelia.json5` gateway token. Verify that Web UI and CLI use this token securely.
 - [ ] **Plugin Security:** Keep `plugins.allowUntrusted` as `false` (default) and explicitly verify any plugins added to `plugins.trusted`.
 - [ ] **Service User:** Run Ontofelia as a dedicated, unprivileged system user (e.g., `ontofelia`), never as `root`.
-- [ ] **Backup Strategy:** Implement automated backups for the knowledge graph (`~/.ontofelia/oxigraph/` with the default backend, or `~/.ontofelia/fuseki/data/` if the legacy Fuseki backend is active) and the `ontofelia.json5` configuration.
+- [ ] **Backup Strategy:** Implement automated backups for the knowledge graph (`~/.ontofelia/triplestore/`) and the `ontofelia.json5` configuration.
