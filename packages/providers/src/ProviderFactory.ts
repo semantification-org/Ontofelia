@@ -3,6 +3,8 @@ import { MockProvider } from '@ontofelia/testkit';
 import { OpenRouterProvider } from './OpenRouterProvider.js';
 import { OpenAIProvider } from './OpenAIProvider.js';
 import { OpenAICodexProvider } from './OpenAICodexProvider.js';
+import { OllamaProvider } from './OllamaProvider.js';
+import { CustomProvider } from './CustomProvider.js';
 
 export class ProviderFactory {
   static create(providerName: string): ProviderAdapter {
@@ -13,6 +15,10 @@ export class ProviderFactory {
         return new OpenAIProvider();
       case 'openai-codex':
         return new OpenAICodexProvider();
+      case 'ollama':
+        return new OllamaProvider();
+      case 'custom':
+        return new CustomProvider();
       case 'mock':
         return new MockProvider();
       default:
