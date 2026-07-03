@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ontofelia website
+    url: https://ontofelia.org
+    about: Project overview, videos, and getting-started material.
+  - name: Security issues
+    url: https://github.com/semantification-org/Ontofelia/blob/main/SECURITY.md
+    about: Please report security vulnerabilities privately — see our security policy.
