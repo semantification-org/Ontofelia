@@ -191,6 +191,21 @@ pwsh -ExecutionPolicy Bypass -File .\install.ps1
 
 Then open **http://127.0.0.1:18780** in your browser. That's it.
 
+### Try this first
+
+Installed, gateway running — now make it show off. The [`examples/`](examples/)
+directory has three copy-paste recipes (~2 minutes each) that demonstrate what
+the knowledge-graph memory actually does:
+
+1. [**Why do you believe that?**](examples/01-why-do-you-believe-that/) — teach the agent a fact, then trace it to its claim + evidence chain
+2. [**Contradiction detected**](examples/02-contradiction-detected/) — contradict a fact and watch the old belief get superseded, not duplicated
+3. [**Career history**](examples/03-career-history/) — the ontology decides: `worksAt` accumulates, `livesIn` replaces
+
+Heads-up: the recipes need a **real LLM provider** (fact extraction runs
+through the LLM) — the `mock` provider from a non-interactive install won't
+produce triples. [`examples/README.md`](examples/README.md) explains the
+one-minute setup.
+
 ### Manual install (advanced)
 
 If you already have **Node.js 20+** and **pnpm** and prefer to run each step yourself:
