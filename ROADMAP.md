@@ -1,134 +1,67 @@
 # Ontofelia Roadmap
 
-> Last updated: 2026-05-17
+> Last updated: 2026-07-03
 
 ## Vision
 
-Ontofelia will become a **fully autonomous AI agent** that evolves itself, replicates across multiple servers, and operates as a networked agent ecosystem.
+Ontofelia is a **self-hosted AI-agent gateway whose long-term memory is a governed knowledge graph**. Instead of a vector store, the agent's beliefs live in an RDF/OWL triplestore with a real reasoner on top: every ingested statement becomes a claim with provenance, inferences are materialised by OWL reasoning, writes are governed, and contradictions are revised instead of accumulated.
+
+The long-term ambition is an agent that can be trusted with durable knowledge *because* its memory is inspectable, auditable, and formally governed — not despite it.
 
 ---
 
-## ✅ Completed
+## ✅ Done
 
-### Foundation (Phase 0–2)
-- Monorepo (pnpm + Turborepo, TypeScript strict, ESM)
-- Core interfaces, config management (JSON5)
-- CLI: init, gateway, status, doctor, channel, pairing, model
-- Gateway: Fastify 5, HTTP REST API, WebSocket
-- Session store: SQLite + JSONL transcripts
-- Agent runtime: tool loop (max 100 rounds), system prompt, bootstrap files
+### Core platform
+- pnpm/TypeScript monorepo: gateway (Fastify, REST + WebSocket), CLI, Web UI, session store (SQLite + JSONL transcripts), agent runtime with tool loop
+- Channels: Telegram (pairing, inline keyboards, model switching), Discord, webhooks
+- LLM providers: OpenRouter, OpenAI (incl. ChatGPT/Codex OAuth login), OpenAI-compatible endpoints; configurable fallback chain
+- Tools + security: exec/fs/memory/ontology tools behind a policy engine, guardian layer for dangerous commands, audit log, sandbox architecture
 
-### UX & channels (Phase 3, 6)
-- Web UI (React/Vite): chat, sessions, settings, debug panel
-- Telegram: polling, pairing, inline keyboards, /model, context line, Markdown fallback
-- Discord: bot API, pairing, mention gating
-- Webhooks: HMAC-signed, template-based
+### Semantic memory
+- Embedded Oxigraph triplestore + Reasonable (OWL reasoning) via a native Rust addon; optional Apache Jena Fuseki backend
+- KnowledgeEngine: entity resolution, auto-TBox extension, claim/evidence provenance, conflict detection
+- Truth maintenance: functional properties supersede, non-functional properties accumulate multi-valued facts
+- Per-user graph isolation for privacy; cross-session recall reads the graphs the ingester actually writes
+- Conversational-perspective (deixis) resolution: user/owner/agent entities are kept distinct during ingestion
 
-### Intelligence (Phase 4, 10)
-- Semantic memory: embedded Oxigraph triplestore + Reasonable (OWL-DL reasoning); optional Apache Jena Fuseki backend
-- KnowledgeEngine: entity resolution, auto-TBox extension, provenance
-- Cross-session memory (30 most recent facts)
-- Ontology management, conflict detection, reflection
-
-### Tools & security (Phase 5, 9)
-- Tools: exec, fs_read/write/list, memory_*, ontology_*, datetime, calculator
-- Autonomy tools: self_inspect, web_fetch, cron_manage
-- Tool policy engine, audit log
-- Sandbox architecture (Docker + Noop)
-
-### Autonomy (priority 1)
-- Streaming responses in the Web UI (token-by-token)
-- Persistent /model switching (ontofelia.json5, sorted model list)
-- Systemd service (ontofelia daemon install)
-- Guardian layer for dangerous exec commands (Telegram buttons)
-- /model with inline keyboards
-- Cron-trigger endpoint for self-wake-up
-- LLM auto-fallback to free models
-- User-configurable fallback order (Fallback A/B in settings)
-- Onboarding (Named Graph gap detection, gradual profiling)
-- Ontofelia avatar (owl mascot in chat bubbles)
-- Fallback transparency (attempted models shown in the error message)
-- Web UI settings (model, fallback, auto-fallback toggle)
-
-### Infrastructure (Phase 7, 8, 11)
-- Skills & plugins system
-- Cron scheduler, webhook receiver
-- Media store, node protocol (WS)
-- LLM providers: OpenRouter, OpenAI (OAuth PKCE)
+### Public release (v0.1 line)
+- Public development on GitHub with CI (build + test), secret scanning (gitleaks), and branch protection
+- One-command installer (`install.sh` / `install.ps1`), running as a plain non-root user — no Docker required
+- Reasoner binaries built and published by CI instead of being committed to the repo
+- Honest [Known Limitations](docs/known-limitations.md) and [Known Gaps](docs/known_gaps.md)
 
 ---
 
 ## 🔄 In progress
 
-*No open implementations right now.*
+- **Try-it-in-2-minutes examples** — scripted recipes that show provenance ("why do you believe that?"), truth maintenance (contradiction → belief revision), and multi-valued facts right after install
+- **Install supervision** — auto-restart on crash/reboot for fresh installs (cron watchdog, systemd user unit)
+- **First tagged release (v0.1)** — with CI-built, verifiable reasoner binaries
+- **Reproducible reasoner-vs-RAG benchmark** — public harness comparing knowledge-graph memory against a fair vector-RAG baseline, stating honestly where the reasoner wins (truth maintenance / contradiction handling) and where it does not
 
----
+## 📋 Next
 
-## 📋 Next milestones
+- **MCP (Model Context Protocol) support** — connect Ontofelia to the growing MCP tool ecosystem
+- **Provenance as a UX feature** — a first-class "why do I believe this?" answer with the claim/evidence chain, in chat and in the Web UI
+- **Security & auditability as a product feature** — the governed agent: policy engine, guardian, and audit log surfaced and documented as a differentiator
+- **Second messaging channel** — Slack or Teams
+- **Installable skill format + registry**
+- **Knowledge-graph performance** — on-disk triplestore backend and write batching for large graphs
 
-### Milestone 1: Robustness & everyday usefulness
-> Goal: Ontofelia runs 24/7 reliably and is useful in daily life.
+## 🔭 Later / research
 
-| Feature | Description | Effort |
-|---|---|---|
-| Multi-user sessions | Each Telegram user gets their own session + memory | 3h |
-| Image/file intake | Telegram: receive and process photos, PDFs, voice | 3h |
-| HTTPS + remote access | Reverse proxy, Let's Encrypt, reachable from anywhere | 2h |
-| Memory browser | Web UI: visually inspect the ontology and facts | 3h |
-| Error recovery | Auto-restart on crash, health-check watchdog | 2h |
-| Telegram BotCommands | Slash menu with function suggestions | 1h |
-
-### Milestone 2: Proactivity & knowledge
-> Goal: Ontofelia acts on its own and learns from documents.
-
-| Feature | Description | Effort |
-|---|---|---|
-| Proactive messages | Agent writes to Telegram on its own (cron → push) | 2h |
-| RAG / document ingestion | Upload documents → index → use when answering | 1 day |
-| Voice I/O | Telegram voice → Whisper STT → answer → TTS | 4h |
-| Web search tool | Real web search (not just fetching single URLs) | 3h |
-| Summaries | Daily/weekly summary of activity | 2h |
-
-### Milestone 3: Self-development
-> Goal: Ontofelia can safely modify its own code.
-
-| Feature | Description | Effort |
-|---|---|---|
-| Safe-mode build | Build in a temp dir, deploy only on success | 2h |
-| Auto-rollback | Git-based: revert + restart if the gateway stops responding | 2h |
-| Smoke test suite | Automated checks: gateway starts? API ok? WS ok? | 3h |
-| Dev-branch workflow | Changes on a branch, merge after review | 2h |
-| Code-review skill | Ontofelia reviews its own changes before committing | 3h |
-
-### Milestone 4: Agent network
-> Goal: Multiple Ontofelia instances work together.
-
-| Feature | Description | Effort |
-|---|---|---|
-| Sub-agent spawning | `spawn_agent` tool: temporary agents with their own prompt | 1 day |
-| Remote deployment | Ontofelia installs itself on a VPS | 4h |
-| Agent-to-agent communication | Messages between instances via API | 1 day |
-| Shared knowledge graph | Federated SPARQL across multiple Fuseki instances | 1 week |
-| Task delegation | Main agent distributes tasks to specialized sub-agents | 1 day |
-
-### Milestone 5: Enterprise & scaling
-> Goal: Ontofelia usable in production environments.
-
-| Feature | Description | Effort |
-|---|---|---|
-| Multi-tenant | Multiple users with separate workspaces and KGs | 1 week |
-| Admin dashboard | Web UI for configuration, user management, monitoring | 1 week |
-| API rate limiting | Per-user limits for LLM calls | 3h |
-| Backup & restore | Automatic backups of KG, sessions, config | 4h |
-| Metrics & monitoring | Prometheus/Grafana integration | 1 day |
+- **Cognitive architecture** — episodic memory, procedural skills, goal stack, and metacognition on top of the knowledge graph (an experimental implementation exists behind feature flags)
+- **Multi-agent & federation** — agent-to-agent communication and federated knowledge graphs
+- **Multi-tenant & operations** — workspaces, admin dashboard, backup/restore, metrics
 
 ---
 
 ## Principles
 
 1. **Local first** — Ontofelia always runs locally; the cloud is optional
-2. **Autonomy over control** — the agent should be able to decide for itself
+2. **Governed autonomy** — the agent acts on its own within explicit, auditable policies
 3. **Semantic over syntactic** — knowledge as a knowledge graph, not text files
 4. **Security through transparency** — guardian layer, audit log, no covert actions
-5. **Incremental** — every feature useful on its own, no big-bang release
-</content>
+5. **Honesty** — limitations are documented, claims are backed by reproducible evidence
+6. **Incremental** — every feature useful on its own, no big-bang release
