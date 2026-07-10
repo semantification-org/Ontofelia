@@ -11,6 +11,11 @@ const ENTITY_NS = 'urn:ontofelia:entity:';
 const CORE_NS = 'urn:ontofelia:core#';
 const TBOX_GRAPH = 'urn:shared:ontology';
 
+// Monotonic per-process suffix for reseedSelf's throwaway staging graph, so two
+// concurrent re-seeds (e.g. the HTTP endpoint and the /reseed-persona command)
+// never share — and thus never DROP — each other's staging graph.
+let reseedTmpSeq = 0;
+
 // Standard RDF/RDFS/OWL vocabulary URIs.
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const RDFS_SUBCLASS_OF = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -1709,7 +1714,7 @@ export class KnowledgeEngine {
     totalAfter: number;
   }> {
     const selfGraph = this.assertGraph(GraphUriResolver.getSelfGraph(agentId));
-    const tmpGraph = `urn:ontofelia:reseed-tmp:self:${agentId}`;
+    const tmpGraph = `urn:ontofelia:reseed-tmp:self:${agentId}:${reseedTmpSeq++}`;
     const ttlPath = path.join(bootstrapDir, 'self.ttl');
 
     const ttl = await fs.readFile(ttlPath, 'utf-8');
