@@ -17,28 +17,45 @@ export async function initPluginsAndSkills(config: OntofeliaConfig, currentDir: 
   skills.forEach(s => skillRegistry.register(s));
   const skillExecutor = new SkillExecutor(skillRegistry);
 
-  // Load Plugins
+  // Load Plugins — from the bundled directory AND the user directory that
+  // `ontofelia plugins install` copies into (`~/.ontofelia/plugins`). Without
+  // the user path, installed plugins were never loaded (silent no-op, #1057).
   const pluginLoader = new PluginLoader();
   const pluginRegistry = new PluginRegistry();
   const bundledPluginsPath = path.resolve(currentDir, '..', '..', 'plugins', 'dist', 'bundled');
-  try {
-    const entries = await fs.promises.readdir(bundledPluginsPath, { withFileTypes: true });
+  const globalPluginsPath = path.join(os.homedir(), '.ontofelia', 'plugins');
+  const trusted = (config.plugins?.trusted as string[]) || [];
+  const allowUntrusted = (config.plugins as { allowUntrusted?: boolean })?.allowUntrusted;
+  const seen = new Set<string>();
+  // Bundled first so a bundled plugin wins over a same-named user install.
+  for (const basePath of [bundledPluginsPath, globalPluginsPath]) {
+    let entries;
+    try {
+      entries = await fs.promises.readdir(basePath, { withFileTypes: true });
+    } catch {
+      continue; // directory absent (e.g. no user plugins installed yet)
+    }
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const pluginPath = path.join(bundledPluginsPath, entry.name);
-        try {
-          const plugin = await pluginLoader.loadFromPath(pluginPath, config.plugins?.trusted as string[] || []);
-          pluginRegistry.register(plugin);
-          if (plugin.trusted || (config.plugins as { allowUntrusted?: boolean })?.allowUntrusted) {
-            await pluginRegistry.activate(plugin.manifest.name, (config.plugins as { allowUntrusted?: boolean })?.allowUntrusted);
-          }
-        } catch (e) {
-          logger.warn(`Failed to load plugin from ${pluginPath}: ${(e as Error).message}`);
+      if (!entry.isDirectory()) continue;
+      const pluginPath = path.join(basePath, entry.name);
+      try {
+        const plugin = await pluginLoader.loadFromPath(pluginPath, trusted);
+        if (seen.has(plugin.manifest.name)) {
+          logger.warn(`Skipping duplicate plugin '${plugin.manifest.name}' from ${pluginPath} (already loaded)`);
+          continue;
         }
+        seen.add(plugin.manifest.name);
+        pluginRegistry.register(plugin);
+        // Activation still follows the trust policy: user-installed plugins are
+        // untrusted by default and require `plugins.trusted`/allowUntrusted or a
+        // manual `plugins activate` — installing must not auto-run untrusted code.
+        if (plugin.trusted || allowUntrusted) {
+          await pluginRegistry.activate(plugin.manifest.name, allowUntrusted);
+        }
+      } catch (e) {
+        logger.warn(`Failed to load plugin from ${pluginPath}: ${(e as Error).message}`);
       }
     }
-  } catch {
-    // Ignore if no plugins found
   }
 
   return { skillLoader, skillRegistry, skillExecutor, pluginLoader, pluginRegistry };
