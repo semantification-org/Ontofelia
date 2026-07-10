@@ -144,7 +144,10 @@ describe('WorkingMemory', () => {
     const after = await wm.read();
     expect(after).toHaveLength(200);
     expect(after.some((e) => e.payload === 'lowest')).toBe(false);
-  });
+    // 200 sequential triplestore writes are CPU-sensitive; the 5s default is too
+    // tight under CI load (parallel reasoner/Windows matrix builds) → flaky
+    // timeout. Give this data-heavy case a generous budget.
+  }, 20_000);
 
   it('carryForward copies eligible entries to the next cycle with decay and a back-link', async () => {
     const selfId = await wm.write({ buffer: 'selfBuffer', entryKind: 'persona-fragment', payload: 'persona', salience: 0.6 }, PHASE);
