@@ -68,6 +68,10 @@ export const configSchema = z.object({
       token: z.string().optional(),
       allowedChats: z.array(z.string()).default([]),
       ownerChatId: z.string().optional(),
+      // Show a live "thinking"/progress status message that updates along the
+      // agent's processing phases (in addition to the always-on typing
+      // indicator). Set false to keep the chat quiet.
+      showProgress: z.boolean().default(true),
     }).optional(),
     discord: z.object({
       enabled: z.boolean().default(false),
