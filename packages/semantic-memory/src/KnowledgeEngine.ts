@@ -1667,4 +1667,120 @@ export class KnowledgeEngine {
 
     return { seeded };
   }
+
+  /**
+   * Re-apply the bootstrap persona/identity (`bootstrap/self.ttl`) to the self
+   * graph of a running installation WITHOUT destroying anything the agent has
+   * learned at runtime.
+   *
+   * Why this exists: {@link seedCoreGraphs} only seeds the self graph when it is
+   * empty, so once an installation is live, edits to `self.ttl` never take
+   * effect. The only other reset path is a full factory reset that also wipes
+   * user facts and the learned self-model. This closes that gap with a
+   * middle way: update the persona, keep everything learned.
+   *
+   * How it stays safe (the "not a naive PUT-replace" part): the bootstrap
+   * persona is asserted about a single subject — the core agent resource
+   * (`urn:ontofelia:core#Ontofelia`). The runtime self-model
+   * ({@link SelfModel}) writes its learned `cogt:` capabilities/constraints
+   * about a *different* subject (`urn:<agent>:self#<agent>`) and its own
+   * resource nodes. Nothing at runtime writes the bootstrap subject into the
+   * self graph. So ownership is decided by SUBJECT: this reseed replaces only
+   * the triples whose subject the file declares, and leaves every other triple
+   * (the learned self-model, and anything else) untouched — regardless of which
+   * predicates a future `self.ttl` uses. The non-bootstrap triple count is
+   * checked identical before and after as a tripwire.
+   *
+   * Atomicity: the delete and insert run as ONE SPARQL DELETE/INSERT/WHERE, so
+   * a concurrent read never observes a persona-less graph and a crash cannot
+   * leave it half-wiped. Idempotent, safe against a live gateway (no restart).
+   * On an empty self graph it behaves like a first-time seed.
+   */
+  async reseedSelf(
+    bootstrapDir: string,
+    agentId: string = 'ontofelia',
+  ): Promise<{
+    selfGraph: string;
+    file: string;
+    bootstrapBefore: number;
+    bootstrapAfter: number;
+    preserved: number;
+    totalBefore: number;
+    totalAfter: number;
+  }> {
+    const selfGraph = this.assertGraph(GraphUriResolver.getSelfGraph(agentId));
+    const tmpGraph = `urn:ontofelia:reseed-tmp:self:${agentId}`;
+    const ttlPath = path.join(bootstrapDir, 'self.ttl');
+
+    const ttl = await fs.readFile(ttlPath, 'utf-8');
+    if (!ttl.trim()) {
+      throw new Error(`Bootstrap self.ttl is empty or missing: ${ttlPath}`);
+    }
+
+    const count = async (body: string): Promise<number> => {
+      const res = await this.triplestore.query(`SELECT (COUNT(*) AS ?c) WHERE { ${body} }`);
+      const v = res.type === 'bindings' ? res.bindings?.[0]?.c?.value : undefined;
+      const n = v ? Number.parseInt(v, 10) : 0;
+      return Number.isFinite(n) ? n : 0;
+    };
+    const countTotal = () => count(`GRAPH <${selfGraph}> { ?s ?p ?o }`);
+    // "Bootstrap-owned" = a self triple whose subject the staged file declares.
+    // The learned self-model uses a different subject, so it is never counted.
+    const countBootstrap = () => count(
+      `GRAPH <${selfGraph}> { ?s ?p ?o } FILTER EXISTS { GRAPH <${tmpGraph}> { ?s ?x ?y } }`,
+    );
+
+    // Clear any leftover staging graph, then parse the file into it (reusing the
+    // Turtle parser). putGraph is inside the try so a parse error still cleans up.
+    await this.triplestore.update(`DROP SILENT GRAPH <${tmpGraph}>`);
+    try {
+      await this.triplestore.putGraph(tmpGraph, ttl, 'turtle');
+
+      const totalBefore = await countTotal();
+      const bootstrapBefore = await countBootstrap();
+      const preservedBefore = totalBefore - bootstrapBefore;
+
+      // One atomic operation. The two UNION branches feed the INSERT
+      // (?is/?ip/?io) and DELETE (?s/?p/?o) templates respectively; the template
+      // variables a branch leaves unbound emit no triples. The DELETE branch
+      // removes only STALE bootstrap triples — owned subject, but not present in
+      // the new file — so a triple that is unchanged between versions is never
+      // deleted-then-reinserted (which engines may collapse to a net delete).
+      // INSERT re-adds every file triple (a no-op for the ones already present).
+      await this.triplestore.update(`
+        DELETE { GRAPH <${selfGraph}> { ?s ?p ?o } }
+        INSERT { GRAPH <${selfGraph}> { ?is ?ip ?io } }
+        WHERE {
+          { GRAPH <${tmpGraph}> { ?is ?ip ?io } }
+          UNION
+          { GRAPH <${selfGraph}> { ?s ?p ?o }
+            FILTER EXISTS     { GRAPH <${tmpGraph}> { ?s ?sx ?sy } }
+            FILTER NOT EXISTS { GRAPH <${tmpGraph}> { ?s ?p ?o } } }
+        }`);
+
+      const totalAfter = await countTotal();
+      const bootstrapAfter = await countBootstrap();
+      const preservedAfter = totalAfter - bootstrapAfter;
+
+      // Tripwire: nothing outside the bootstrap subject(s) moved.
+      if (preservedAfter !== preservedBefore) {
+        throw new Error(
+          `reseedSelf invariant violated: non-bootstrap triples changed ` +
+          `${preservedBefore} → ${preservedAfter} (concurrent write?); re-run to reconcile`,
+        );
+      }
+
+      return {
+        selfGraph,
+        file: ttlPath,
+        bootstrapBefore,
+        bootstrapAfter,
+        preserved: preservedAfter,
+        totalBefore,
+        totalAfter,
+      };
+    } finally {
+      await this.triplestore.update(`DROP SILENT GRAPH <${tmpGraph}>`);
+    }
+  }
 }

@@ -46,7 +46,7 @@ function describeKnownGraph(uri: string): { role: string; agentId: string | null
 }
 
 export default async function memoryRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
-  const { triplestore, ontologyManager, ontologyBasePath } = ctx;
+  const { triplestore, ontologyManager, ontologyBasePath, knowledgeEngine } = ctx;
   const logger = createLogger('routes-memory');
 
   let lastKnowledgeDelete = 0;
@@ -194,6 +194,26 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
       return { deleted: true, backupPath, timestamp: new Date().toISOString() };
     } catch (e) {
       logger.error('Failed to clear knowledge: ' + (e as Error).message);
+      return reply.code(500).send({ error: (e as Error).message });
+    }
+  });
+
+  // Re-apply bootstrap/self.ttl (persona/identity) to the self graph on a live
+  // install, WITHOUT wiping runtime-learned facts. seedCoreGraphs only seeds an
+  // empty self graph, so this is the only non-destructive way to push persona
+  // edits after first boot (the alternative being a full factory reset).
+  fastify.post('/api/ontology/reseed-self', async (_request, reply) => {
+    try {
+      const gatewayDir = path.dirname(fileURLToPath(import.meta.url));
+      const bootstrapDir = path.resolve(gatewayDir, '..', '..', '..', '..', 'bootstrap');
+      const report = await knowledgeEngine.reseedSelf(bootstrapDir, PRIMARY_AGENT_ID);
+      logger.info(
+        `Self graph re-seeded from bootstrap/self.ttl: bootstrap ${report.bootstrapBefore} → ${report.bootstrapAfter}, ` +
+        `${report.preserved} learned/other triple(s) preserved`,
+      );
+      return report;
+    } catch (e) {
+      logger.error('Failed to reseed self graph: ' + (e as Error).message);
       return reply.code(500).send({ error: (e as Error).message });
     }
   });
