@@ -157,7 +157,10 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     owner: 'system'
   };
 
-  const defaultAgent = new AgentRuntime(PRIMARY_AGENT_ID, defaultAgentConfig, provider, sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, config.provider as import('@ontofelia/core').ProviderConfig, knowledgeEngine);
+  // Bootstrap dir (repo `bootstrap/`) so the `/reseed-persona` command can
+  // re-apply self.ttl at runtime. currentDir is apps/gateway/dist.
+  const bootstrapDir = path.resolve(currentDir, '..', '..', '..', 'bootstrap');
+  const defaultAgent = new AgentRuntime(PRIMARY_AGENT_ID, defaultAgentConfig, provider, sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, config.provider as import('@ontofelia/core').ProviderConfig, knowledgeEngine, bootstrapDir);
   await defaultAgent.initialize();
 
   const agents = new Map<string, AgentRuntime>();

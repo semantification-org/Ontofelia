@@ -108,5 +108,7 @@ describe('AgentRuntime toolLoop', () => {
     const res = await runtime.handleMessage(createEnv('call tool'));
     expect(res.text).toBe('infinite');
     expect(provider.callCount).toBe(101); // 1 initial + 100 iterations
-  });
+    // 101 sequential mock LLM+tool iterations run past vitest's 5s default on
+    // the shared CI runner; the assertion is about correctness, not speed.
+  }, 20_000);
 });

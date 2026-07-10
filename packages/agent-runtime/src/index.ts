@@ -108,7 +108,11 @@ export class AgentRuntime {
     private skillExecutor: SkillExecutor,
     private pluginRegistry: PluginRegistry,
     private providerConfig?: import('@ontofelia/core').ProviderConfig,
-    private knowledgeEngine?: KnowledgeEngine
+    private knowledgeEngine?: KnowledgeEngine,
+    // Absolute path to the repo's `bootstrap/` dir, so `/reseed-persona` can
+    // re-apply self.ttl at runtime. Set by the gateway; when absent the command
+    // reports that re-seeding is unavailable.
+    private bootstrapDir?: string
   ) {
     this.toolExecutor = new ToolExecutor(toolRegistry, toolPolicy, auditLog);
     if (knowledgeEngine) {
@@ -1590,6 +1594,29 @@ Users can use these commands:
       }
       return { text: 'Usage: /cog [health|retain|consolidate|scan|migrate|debug on|debug off|cycles|explain <cycleId>]', sessionId: session.sessionId };
     }
+    // /reseed-persona — re-apply bootstrap/self.ttl (persona/identity) to the
+    // self graph at runtime, without wiping anything the agent has learned.
+    // Owner-only, since it rewrites the agent's own identity.
+    if (cmd === '/reseed-persona') {
+      if (!isOwner) {
+        return { text: 'This command is owner-only.', sessionId: session.sessionId };
+      }
+      if (!this.knowledgeEngine || !this.bootstrapDir) {
+        return { text: 'Persona re-seed is unavailable (no knowledge engine or bootstrap path configured).', sessionId: session.sessionId };
+      }
+      try {
+        const r = await this.knowledgeEngine.reseedSelf(this.bootstrapDir, this.agentId);
+        return {
+          text: `🪞 Persona re-seeded from bootstrap.\n`
+            + `• Bootstrap triples: ${r.bootstrapBefore} → ${r.bootstrapAfter}\n`
+            + `• Learned/other preserved: ${r.preserved}\n`
+            + `• Self graph total: ${r.totalBefore} → ${r.totalAfter}`,
+          sessionId: session.sessionId,
+        };
+      } catch (e) {
+        return { text: `Persona re-seed failed: ${(e as Error).message}`, sessionId: session.sessionId };
+      }
+    }
     if (cmd === '/reset') {
       await this.sessionStore.resetSession(session.sessionId, 'hard');
       return { text: 'Session has been reset (transcript cleared).', sessionId: session.sessionId };
@@ -1680,7 +1707,8 @@ Users can use these commands:
     }
 
     if (cmd === '/help') {
-      return { text: 'Available commands: /new, /reset, /status, /tools, /model, /skills, /plugins, /help, /stop', sessionId: session.sessionId };
+      const ownerCommands = isOwner ? ', /reseed-persona' : '';
+      return { text: `Available commands: /new, /reset, /status, /tools, /model, /skills, /plugins, /help, /stop${ownerCommands}`, sessionId: session.sessionId };
     }
     if (cmd === '/stop') {
       await this.stop();
