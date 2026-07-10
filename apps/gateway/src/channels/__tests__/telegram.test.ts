@@ -1,5 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { splitForTelegram } from '../telegram.js';
+import { splitForTelegram, telegramPhaseLabel } from '../telegram.js';
+
+describe('telegramPhaseLabel (live progress status)', () => {
+  it('maps known agent phases to short human labels', () => {
+    expect(telegramPhaseLabel('kg_context')).toBe('🔎 Searching memory…');
+    expect(telegramPhaseLabel('llm_call')).toBe('🧠 Reasoning…');
+    expect(telegramPhaseLabel('llm_response')).toBe('✍️ Writing answer…');
+    expect(telegramPhaseLabel('final')).toBe('✍️ Writing answer…');
+  });
+
+  it('includes the tool name for tool_call when present', () => {
+    expect(telegramPhaseLabel('tool_call', { toolName: 'web_search' })).toBe('🔧 Running tool: web_search');
+    expect(telegramPhaseLabel('tool_call', { name: 'calc' })).toBe('🔧 Running tool: calc');
+    expect(telegramPhaseLabel('tool_call')).toBe('🔧 Running tool…');
+  });
+
+  it('returns null for phases that should not change the status', () => {
+    // guardian_confirm is handled separately; unknown phases are ignored.
+    expect(telegramPhaseLabel('guardian_confirm')).toBeNull();
+    expect(telegramPhaseLabel('something_else')).toBeNull();
+  });
+});
 
 describe('splitForTelegram', () => {
   it('returns the text unchanged when shorter than the limit', () => {

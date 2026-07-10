@@ -122,6 +122,45 @@ function formatTablesForTelegram(text: string): string {
   });
 }
 
+// --- Liveness / progress UX (TG-1 typing, TG-2 live status) ---
+export const TELEGRAM_INITIAL_STATUS = '🤔 Thinking…';
+// Telegram throttles edits to the same message (~1/sec before 429); only edit
+// when the label actually changes and at most this often.
+export const TELEGRAM_STATUS_EDIT_THROTTLE_MS = 1500;
+// Re-send the native "typing…" chat action on this cadence (it expires ~5s).
+export const TELEGRAM_TYPING_INTERVAL_MS = 4000;
+
+/**
+ * Map an agent onDebug phase to a short, human status label for the live
+ * progress message. Returns null for phases that should not change the status
+ * (e.g. guardian_confirm, which is handled separately, or unknown phases).
+ */
+export function telegramPhaseLabel(phase: string, data?: unknown): string | null {
+  switch (phase) {
+    case 'perception':
+    case 'ner':
+      return '🔎 Reading your message…';
+    case 'kg_context':
+      return '🔎 Searching memory…';
+    case 'llm_call':
+      return '🧠 Reasoning…';
+    case 'tool_call': {
+      const name = (data as { toolName?: string; name?: string } | undefined)?.toolName
+        ?? (data as { name?: string } | undefined)?.name;
+      return name ? `🔧 Running tool: ${name}` : '🔧 Running tool…';
+    }
+    case 'tool_result':
+      return '🧠 Processing result…';
+    case 'reflection':
+      return '🤔 Reflecting…';
+    case 'llm_response':
+    case 'final':
+      return '✍️ Writing answer…';
+    default:
+      return null;
+  }
+}
+
 export async function setupTelegramChannel(
   config: OntofeliaConfig,
   telegramAdapter: TelegramAdapter,
@@ -259,10 +298,43 @@ export async function setupTelegramChannel(
   telegramAdapter.onMessage(async (envelope) => {
     const agent = agents.get(resolveAgentId(envelope.routingHints?.agentId));
     if (agent) {
+      const replyTarget = envelope.target || envelope.sender.id;
+      const bot = telegramAdapter.getBot();
+      const showProgress = config.channels?.telegram?.showProgress !== false;
+
+      // Liveness UX: a re-pinged "typing…" action (TG-1) plus a single status
+      // message that updates along the agent's phases (TG-2). Both are
+      // best-effort — failures here must never break the reply.
+      let typingTimer: ReturnType<typeof setInterval> | undefined;
+      let statusMsgId: number | undefined;
+      let removeDebug: (() => void) | undefined;
+      let lastLabel = '';
+      let lastEditAt = 0;
+
+      const clearStatus = async () => {
+        if (statusMsgId !== undefined && bot) {
+          const id = statusMsgId;
+          statusMsgId = undefined;
+          await bot.deleteMessage(replyTarget, id).catch(() => {});
+        }
+      };
+
       try {
-        const replyTarget = envelope.target || envelope.sender.id;
-        
-        const removeDebug = agent.onDebug((event) => {
+        if (bot) {
+          const ping = () => { bot.sendChatAction(replyTarget, 'typing').catch(() => {}); };
+          ping();
+          typingTimer = setInterval(ping, TELEGRAM_TYPING_INTERVAL_MS);
+        }
+        if (bot && showProgress) {
+          try {
+            const m = await bot.sendMessage(replyTarget, TELEGRAM_INITIAL_STATUS);
+            statusMsgId = m.message_id;
+          } catch (e) {
+            logger.warn('Telegram status message failed to send: ' + (e as Error).message);
+          }
+        }
+
+        removeDebug = agent.onDebug((event) => {
           if (event.phase === 'guardian_confirm') {
             const data = event.data as { callId?: string; toolName?: string; command?: string; args?: unknown };
             const callId = data?.callId;
@@ -300,22 +372,52 @@ export async function setupTelegramChannel(
                 }
               }).catch((e) => logger.error('Guardian approval prompt failed to send: ' + (e as Error).message));
             }
+            // Reflect the approval wait so the status doesn't look stuck while
+            // the agent blocks for the user's Approve/Deny tap.
+            if (showProgress && bot && statusMsgId !== undefined) {
+              lastLabel = '⏳ Waiting for your approval…';
+              lastEditAt = Date.now();
+              bot.editMessageText(lastLabel, { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
+            }
+            return;
+          }
+
+          // TG-2: reflect the current phase in the live status message.
+          // Known limitation: agent.onDebug is a shared bus with no per-message
+          // correlation id, so under truly concurrent messages to the same
+          // agent a chat may briefly show another chat's phase label. Cosmetic
+          // (right chat, wrong label); a real fix needs sessionId threaded
+          // through emitDebug — tracked as a follow-up on the TG-2 ticket.
+          if (showProgress && bot && statusMsgId !== undefined) {
+            const label = telegramPhaseLabel(event.phase, event.data);
+            if (label && label !== lastLabel) {
+              const now = Date.now();
+              if (now - lastEditAt >= TELEGRAM_STATUS_EDIT_THROTTLE_MS) {
+                lastLabel = label;
+                lastEditAt = now;
+                bot.editMessageText(label, { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
+              }
+            }
           }
         });
 
         const response = await agent.handleMessage(envelope);
         removeDebug();
+        removeDebug = undefined;
+        await clearStatus();
         await sendTelegramResponse(replyTarget, response, envelope.id);
       } catch (err: unknown) {
         const errMsg = (err as Error).message || 'Unknown error';
         logger.error('Telegram handler error: ' + errMsg);
-        const replyTarget = envelope.target || envelope.sender.id;
-        const bot = telegramAdapter.getBot();
         if (bot) {
           bot.sendMessage(replyTarget, `⚠️ Error: ${errMsg.substring(0, 200)}`, {
             reply_to_message_id: parseInt(envelope.id, 10) || undefined
           }).catch(() => {});
         }
+      } finally {
+        if (typingTimer) clearInterval(typingTimer);
+        if (removeDebug) removeDebug();
+        await clearStatus();
       }
     }
   });
