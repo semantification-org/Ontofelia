@@ -3,16 +3,16 @@ import { splitForTelegram, telegramPhaseLabel } from '../telegram.js';
 
 describe('telegramPhaseLabel (live progress status)', () => {
   it('maps known agent phases to short human labels', () => {
-    expect(telegramPhaseLabel('kg_context')).toBe('🔎 Durchsuche Gedächtnis…');
-    expect(telegramPhaseLabel('llm_call')).toBe('🧠 Überlege…');
-    expect(telegramPhaseLabel('llm_response')).toBe('✍️ Formuliere Antwort…');
-    expect(telegramPhaseLabel('final')).toBe('✍️ Formuliere Antwort…');
+    expect(telegramPhaseLabel('kg_context')).toBe('🔎 Searching memory…');
+    expect(telegramPhaseLabel('llm_call')).toBe('🧠 Reasoning…');
+    expect(telegramPhaseLabel('llm_response')).toBe('✍️ Writing answer…');
+    expect(telegramPhaseLabel('final')).toBe('✍️ Writing answer…');
   });
 
   it('includes the tool name for tool_call when present', () => {
-    expect(telegramPhaseLabel('tool_call', { toolName: 'web_search' })).toBe('🔧 Führe Tool aus: web_search');
-    expect(telegramPhaseLabel('tool_call', { name: 'calc' })).toBe('🔧 Führe Tool aus: calc');
-    expect(telegramPhaseLabel('tool_call')).toBe('🔧 Führe Tool aus…');
+    expect(telegramPhaseLabel('tool_call', { toolName: 'web_search' })).toBe('🔧 Running tool: web_search');
+    expect(telegramPhaseLabel('tool_call', { name: 'calc' })).toBe('🔧 Running tool: calc');
+    expect(telegramPhaseLabel('tool_call')).toBe('🔧 Running tool…');
   });
 
   it('returns null for phases that should not change the status', () => {

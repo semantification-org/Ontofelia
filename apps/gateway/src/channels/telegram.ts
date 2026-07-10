@@ -123,7 +123,7 @@ function formatTablesForTelegram(text: string): string {
 }
 
 // --- Liveness / progress UX (TG-1 typing, TG-2 live status) ---
-export const TELEGRAM_INITIAL_STATUS = '🤔 Denke nach…';
+export const TELEGRAM_INITIAL_STATUS = '🤔 Thinking…';
 // Telegram throttles edits to the same message (~1/sec before 429); only edit
 // when the label actually changes and at most this often.
 export const TELEGRAM_STATUS_EDIT_THROTTLE_MS = 1500;
@@ -139,23 +139,23 @@ export function telegramPhaseLabel(phase: string, data?: unknown): string | null
   switch (phase) {
     case 'perception':
     case 'ner':
-      return '🔎 Verstehe deine Nachricht…';
+      return '🔎 Reading your message…';
     case 'kg_context':
-      return '🔎 Durchsuche Gedächtnis…';
+      return '🔎 Searching memory…';
     case 'llm_call':
-      return '🧠 Überlege…';
+      return '🧠 Reasoning…';
     case 'tool_call': {
       const name = (data as { toolName?: string; name?: string } | undefined)?.toolName
         ?? (data as { name?: string } | undefined)?.name;
-      return name ? `🔧 Führe Tool aus: ${name}` : '🔧 Führe Tool aus…';
+      return name ? `🔧 Running tool: ${name}` : '🔧 Running tool…';
     }
     case 'tool_result':
-      return '🧠 Verarbeite Ergebnis…';
+      return '🧠 Processing result…';
     case 'reflection':
-      return '🤔 Reflektiere…';
+      return '🤔 Reflecting…';
     case 'llm_response':
     case 'final':
-      return '✍️ Formuliere Antwort…';
+      return '✍️ Writing answer…';
     default:
       return null;
   }
@@ -375,7 +375,7 @@ export async function setupTelegramChannel(
             // Reflect the approval wait so the status doesn't look stuck while
             // the agent blocks for the user's Approve/Deny tap.
             if (showProgress && bot && statusMsgId !== undefined) {
-              lastLabel = '⏳ Warte auf deine Freigabe…';
+              lastLabel = '⏳ Waiting for your approval…';
               lastEditAt = Date.now();
               bot.editMessageText(lastLabel, { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
             }
