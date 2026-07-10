@@ -85,4 +85,51 @@ describe('ExecTool', () => {
       });
     }
   });
+
+  describe('timeout handling (BUG-B)', () => {
+    const ctx: ToolContext = {
+      agentId: 'a1', sessionId: 's1', workspacePath: '/ws', channelType: 'cli',
+      senderId: 'usr', isOwner: true,
+    } as ToolContext;
+    const mkSandbox = (result: { exitCode: number; stdout: string; stderr: string; timedOut?: boolean }) => ({
+      getOrCreate: vi.fn().mockResolvedValue('sb'),
+      exec: vi.fn().mockResolvedValue(result),
+    } as unknown as ConstructorParameters<typeof ExecTool>[0]);
+
+    it('defaults the per-command timeout when none is given', async () => {
+      const sandboxMock = mkSandbox({ exitCode: 0, stdout: '', stderr: '' });
+      await new ExecTool(sandboxMock).execute({ command: 'echo hi' }, ctx);
+      const opts = (sandboxMock.exec as unknown as ReturnType<typeof vi.fn>).mock.calls[0][2];
+      expect(opts.timeoutMs).toBe(ExecTool.DEFAULT_TIMEOUT_MS);
+    });
+
+    it('passes a caller timeout through and clamps it to the max', async () => {
+      const sandboxMock = mkSandbox({ exitCode: 0, stdout: '', stderr: '' });
+      const tool = new ExecTool(sandboxMock);
+      await tool.execute({ command: 'pnpm build', timeout: 600_000 }, ctx);
+      let opts = (sandboxMock.exec as unknown as ReturnType<typeof vi.fn>).mock.calls[0][2];
+      expect(opts.timeoutMs).toBe(600_000); // honored, not capped at 30s
+
+      await tool.execute({ command: 'pnpm build', timeout: 99_999_999 }, ctx);
+      opts = (sandboxMock.exec as unknown as ReturnType<typeof vi.fn>).mock.calls[1][2];
+      expect(opts.timeoutMs).toBe(ExecTool.MAX_TIMEOUT_MS); // clamped
+    });
+
+    it('exposes an executor-level ceiling above the max command timeout', () => {
+      // ToolExecutor times out at `tool.timeoutMs`; it must exceed MAX so exec's
+      // own timeout always fires first and returns a clean timedOut result.
+      const tool = new ExecTool(mkSandbox({ exitCode: 0, stdout: '', stderr: '' }));
+      expect(tool.timeoutMs).toBeGreaterThan(ExecTool.MAX_TIMEOUT_MS);
+    });
+
+    it('returns an actionable, non-crashing result on timeout', async () => {
+      const sandboxMock = mkSandbox({ exitCode: 124, stdout: 'partial', stderr: 'boom', timedOut: true });
+      const res = await new ExecTool(sandboxMock).execute({ command: 'pnpm build' }, ctx);
+      expect(res.success).toBe(false);
+      const out = res.output as { timedOut?: boolean; stderr?: string };
+      expect(out.timedOut).toBe(true);
+      expect(out.stderr).toMatch(/timed out/i);
+      expect(out.stderr).toMatch(/larger `?timeout`?/i);
+    });
+  });
 });
