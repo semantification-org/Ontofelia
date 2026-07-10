@@ -79,6 +79,30 @@ export function registerOntologyCommand(program: Command) {
     });
   
   ontologyCmd
+    .command('reseed-self')
+    .description('Re-apply bootstrap/self.ttl (persona/identity) to the self graph without deleting learned facts')
+    .action(async () => {
+      try {
+        const config = await loadConfig();
+        const res = await fetch(`http://127.0.0.1:${config.gateway.port}/api/ontology/reseed-self`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${config.gateway.token}` }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status} - ${await res.text()}`);
+        const r = await res.json() as {
+          bootstrapBefore: number; bootstrapAfter: number; preserved: number;
+          totalBefore: number; totalAfter: number;
+        };
+        console.log(chalk.green('✔ Self graph re-seeded from bootstrap/self.ttl'));
+        console.log(`  Bootstrap persona triples: ${r.bootstrapBefore} → ${r.bootstrapAfter}`);
+        console.log(`  Learned / other triples preserved: ${chalk.cyan(r.preserved)}`);
+        console.log(`  Self graph total: ${r.totalBefore} → ${r.totalAfter}`);
+      } catch (err: unknown) {
+        console.error(chalk.red(`Failed to reseed self graph: ${(err as Error).message}`));
+      }
+    });
+
+  ontologyCmd
     .command('rollback')
     .description('Rollback to a specific version')
     .argument('<version>', 'Version string (e.g. v001)')
