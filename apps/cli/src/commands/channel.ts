@@ -14,6 +14,17 @@ const execFileAsync = promisify(execFile);
 
 import { loadConfig, saveConfig } from '@ontofelia/config';
 
+/**
+ * Resolve the CLI entrypoint (`dist/index.js`) for the systemd `ExecStart`,
+ * given the directory of the compiled command module. At runtime this command
+ * lives at `apps/cli/dist/commands/channel.js`, so the entrypoint is exactly
+ * one level up. A stray extra `'dist'` segment here produced a non-existent
+ * `dist/dist/index.js` path, which made the generated unit crash-loop.
+ */
+export function resolveDaemonCliEntry(commandDir: string): string {
+  return path.resolve(commandDir, '..', 'index.js');
+}
+
 
 
 export function registerChannelCommand(program: Command) {
@@ -139,7 +150,7 @@ export function registerChannelCommand(program: Command) {
     const user = os.userInfo().username;
     const homeDir = os.homedir();
     const nodePath = process.execPath; // gets the current node binary path
-    const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
+    const cliPath = resolveDaemonCliEntry(path.dirname(fileURLToPath(import.meta.url)));
     
     const serviceContent = `[Unit]
   Description=Ontofelia AI Gateway
