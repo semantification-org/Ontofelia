@@ -1,10 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { ChannelType, MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
-
-function resolveAgentId(agentId?: string): string {
-  return !agentId || agentId === 'default' ? PRIMARY_AGENT_ID : agentId;
-}
+import { ChannelType, MessageEnvelope, resolveAgentId } from '@ontofelia/core';
 
 export default async function agentRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
   const { agents, sessionStore, toolRegistry } = ctx;

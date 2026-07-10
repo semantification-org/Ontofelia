@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { safeCompareSecret } from '@ontofelia/security';
 
 export default async function systemRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
@@ -89,7 +89,7 @@ export default async function systemRoutes(fastify: FastifyInstance, ctx: Gatewa
       return reply.code(409).send({ error: 'Replay detected' });
     }
 
-    const agent = agents.get(webhook.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(webhook.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
 
     const prompt = webhook.prompt

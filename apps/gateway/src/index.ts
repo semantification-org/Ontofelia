@@ -3,7 +3,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { OntofeliaConfig } from '@ontofelia/config';
-import { createLogger, AgentConfig, ChannelType, ChannelBinding, MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { createLogger, AgentConfig, ChannelType, ChannelBinding, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { SessionStore } from '@ontofelia/session-store';
 import { AgentRuntime } from '@ontofelia/agent-runtime';
 import { MockProvider } from '@ontofelia/testkit';
@@ -174,7 +174,7 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   await scheduler.load();
 
   scheduler.onJob(async (job) => {
-    const agent = agents.get(job.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(job.agentId));
     if (!agent) return;
     const envelope: MessageEnvelope = {
       id: crypto.randomUUID(),
