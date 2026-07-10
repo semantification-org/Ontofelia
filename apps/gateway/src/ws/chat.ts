@@ -1,11 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { createLogger, MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { createLogger, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { safeCompareSecret } from '@ontofelia/security';
-
-function resolveAgentId(agentId?: string): string {
-  return !agentId || agentId === 'default' ? PRIMARY_AGENT_ID : agentId;
-}
 
 export default async function wsChatRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
   const { config, agents, nodeRegistry, mediaStore, signedUrlService, mimeDetector } = ctx;

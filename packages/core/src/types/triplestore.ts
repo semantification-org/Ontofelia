@@ -10,6 +10,20 @@ import { HealthResult } from './common.js';
  */
 export const PRIMARY_AGENT_ID = 'ontofelia';
 
+/**
+ * Resolve a caller-supplied agent identifier to a concrete agent id.
+ *
+ * The CLI and several API surfaces use the placeholder `"default"` (and
+ * some callers pass nothing at all) to mean "the primary agent". This helper
+ * is the single source of truth for that mapping — use it everywhere an
+ * external `agentId` reaches an `agents.get(...)` lookup, so that a
+ * `"default"` never silently misses the agent registry (e.g. cron jobs
+ * created by `ontofelia cron add` firing into the void).
+ */
+export function resolveAgentId(agentId?: string | null): string {
+  return !agentId || agentId === 'default' ? PRIMARY_AGENT_ID : agentId;
+}
+
 export interface TriplestoreAdapter {
   readonly backend: "fuseki" | "oxigraph" | "memory";
   readonly status: "stopped" | "starting" | "running" | "error";
