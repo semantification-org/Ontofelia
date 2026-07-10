@@ -70,8 +70,10 @@ export const configSchema = z.object({
       ownerChatId: z.string().optional(),
       // Show a live "thinking"/progress status message that updates along the
       // agent's processing phases (in addition to the always-on typing
-      // indicator). Set false to keep the chat quiet.
-      showProgress: z.boolean().default(true),
+      // indicator). Defaults to on when unset; set false to keep the chat
+      // quiet. Optional (not defaulted) so existing telegram-config literals
+      // that omit it still type-check.
+      showProgress: z.boolean().optional(),
     }).optional(),
     discord: z.object({
       enabled: z.boolean().default(false),
