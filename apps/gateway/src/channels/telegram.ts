@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { createLogger, MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { createLogger, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import type { AgentRuntime } from '@ontofelia/agent-runtime';
 import type { TelegramAdapter } from '@ontofelia/channels';
 import type { AllowlistStore } from '@ontofelia/channels';
@@ -257,7 +257,7 @@ export async function setupTelegramChannel(
   let guardianSeq = 0;
 
   telegramAdapter.onMessage(async (envelope) => {
-    const agent = agents.get(envelope.routingHints?.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(envelope.routingHints?.agentId));
     if (agent) {
       try {
         const replyTarget = envelope.target || envelope.sender.id;

@@ -1,14 +1,14 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { MessageEnvelope, PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { MessageEnvelope, resolveAgentId } from '@ontofelia/core';
 
 export default async function adminRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
   const { agents, scheduler, webhookRegistry, sandboxAdapter,
     skillRegistry, pluginRegistry } = ctx;
 
   fastify.post('/api/cron-trigger', async (request: FastifyRequest<{ Body: { message?: string; agentId?: string } }>) => {
-    const { message = 'Cron-Wakeup: Du wurdest von einem geplanten Job geweckt.', agentId = PRIMARY_AGENT_ID } = request.body || {};
-    const agent = agents.get(agentId);
+    const { message = 'Cron-Wakeup: Du wurdest von einem geplanten Job geweckt.', agentId } = request.body || {};
+    const agent = agents.get(resolveAgentId(agentId));
     if (!agent) return { error: 'Agent not found' };
 
     const envelope: MessageEnvelope = {
@@ -25,8 +25,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
   // Cognitive-architecture observability (doc 09 §9). Per-graph counts and
   // cycle-latency stats for the cognitive named graphs.
   fastify.get('/api/cog/health', async (request: FastifyRequest<{ Querystring: { agentId?: string } }>, reply) => {
-    const agentId = request.query.agentId || PRIMARY_AGENT_ID;
-    const agent = agents.get(agentId);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     const health = await agent.cogHealth();
     if (!health) return reply.code(503).send({ error: 'Cognitive architecture not active' });
@@ -40,7 +39,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
     request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; limit?: string } }>,
     reply,
   ) => {
-    const agent = agents.get(request.query.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId) return reply.code(400).send({ error: 'sessionId required' });
     const ins = await agent.cogInspector();
@@ -53,7 +52,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
     request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string } }>,
     reply,
   ) => {
-    const agent = agents.get(request.query.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId || !request.query.cycleId)
       return reply.code(400).send({ error: 'sessionId and cycleId required' });
@@ -68,7 +67,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
     request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string } }>,
     reply,
   ) => {
-    const agent = agents.get(request.query.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId) return reply.code(400).send({ error: 'sessionId required' });
     const ins = await agent.cogInspector();
@@ -80,7 +79,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
     request: FastifyRequest<{ Querystring: { agentId?: string; entity?: string; limit?: string } }>,
     reply,
   ) => {
-    const agent = agents.get(request.query.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
@@ -92,7 +91,7 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
     request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string } }>,
     reply,
   ) => {
-    const agent = agents.get(request.query.agentId || PRIMARY_AGENT_ID);
+    const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId || !request.query.cycleId)
       return reply.code(400).send({ error: 'sessionId and cycleId required' });

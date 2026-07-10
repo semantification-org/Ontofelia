@@ -7,7 +7,7 @@ import {
   WebChatAdapter, TelegramAdapter, DiscordAdapter
 } from '@ontofelia/channels';
 import { setupTelegramChannel } from '../channels/telegram.js';
-import { PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { resolveAgentId } from '@ontofelia/core';
 
 export async function initChannels(
   config: OntofeliaConfig,
@@ -43,7 +43,7 @@ export async function initChannels(
     const discordAdapter = new DiscordAdapter(pairingStore, allowlistStore);
     await discordAdapter.initialize(discordConfig as unknown as Parameters<typeof discordAdapter.initialize>[0]);
     discordAdapter.onMessage(async (envelope) => {
-      const agent = agents.get(envelope.routingHints?.agentId || PRIMARY_AGENT_ID);
+      const agent = agents.get(resolveAgentId(envelope.routingHints?.agentId));
       if (agent) {
         const response = await agent.handleMessage(envelope);
         const replyTarget = envelope.chatType === 'dm' ? envelope.sender.id : (envelope.target || envelope.sender.id);
