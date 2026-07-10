@@ -72,6 +72,34 @@ describe('CycleManager', () => {
     expect(ordinals).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
+  it('emits perception and reflection phases to onPhase (live status UI)', async () => {
+    const phases: string[] = [];
+    await cm.runCycle(
+      makeEnvelope('hello'),
+      async () => ({ text: 'hi', sessionId: 'sessP1' }),
+      (r) => r.sessionId,
+      undefined,
+      { onPhase: (p) => phases.push(p) },
+    );
+    expect(phases).toContain('perception');
+    expect(phases).toContain('reflection');
+  });
+
+  it('emits goal_management when the core resolves a goal (deliberation)', async () => {
+    const phases: string[] = [];
+    await cm.runCycle(
+      makeEnvelope('what is oxigraph?'),
+      async (_recordTool, prepareGoals) => {
+        await prepareGoals('sessP2');
+        return { text: 'a triplestore', sessionId: 'sessP2' };
+      },
+      (r) => r.sessionId,
+      undefined,
+      { goalsEnabled: true, onPhase: (p) => phases.push(p) },
+    );
+    expect(phases).toContain('goal_management');
+  });
+
   it('writes perception entries (message text + sender) into the cycle working graph', async () => {
     const SESS = 'sessC2';
     let cycleWorkingGraph = '';

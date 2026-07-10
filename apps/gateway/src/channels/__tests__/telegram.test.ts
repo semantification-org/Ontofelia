@@ -1,24 +1,51 @@
 import { describe, it, expect } from 'vitest';
-import { splitForTelegram, telegramPhaseLabel } from '../telegram.js';
+import { splitForTelegram, telegramStepLabel, renderTelegramChecklist, TELEGRAM_STATUS_HEADER } from '../telegram.js';
 
-describe('telegramPhaseLabel (live progress status)', () => {
-  it('maps known agent phases to short human labels', () => {
-    expect(telegramPhaseLabel('kg_context')).toBe('🔎 Searching memory…');
-    expect(telegramPhaseLabel('llm_call')).toBe('🧠 Reasoning…');
-    expect(telegramPhaseLabel('llm_response')).toBe('✍️ Writing answer…');
-    expect(telegramPhaseLabel('final')).toBe('✍️ Writing answer…');
+describe('telegramStepLabel (checklist steps)', () => {
+  it('maps the cognitive-cycle phases explicitly', () => {
+    expect(telegramStepLabel('perception')).toBe('👁 Perception');
+    expect(telegramStepLabel('goal_management', { goalType: 'answer_question' })).toBe('🎯 Goal: answer_question');
+    expect(telegramStepLabel('goal_management')).toBe('🎯 Deliberation');
+    expect(telegramStepLabel('reflection')).toBe('🔍 Reflection');
   });
 
-  it('includes the tool name for tool_call when present', () => {
-    expect(telegramPhaseLabel('tool_call', { toolName: 'web_search' })).toBe('🔧 Running tool: web_search');
-    expect(telegramPhaseLabel('tool_call', { name: 'calc' })).toBe('🔧 Running tool: calc');
-    expect(telegramPhaseLabel('tool_call')).toBe('🔧 Running tool…');
+  it('maps the core LLM/memory phases', () => {
+    expect(telegramStepLabel('kg_context')).toBe('🔎 Searching memory');
+    expect(telegramStepLabel('llm_call')).toBe('🧠 Reasoning');
+    expect(telegramStepLabel('llm_response')).toBe('✍️ Writing answer');
+    expect(telegramStepLabel('final')).toBe('✍️ Writing answer');
   });
 
-  it('returns null for phases that should not change the status', () => {
-    // guardian_confirm is handled separately; unknown phases are ignored.
-    expect(telegramPhaseLabel('guardian_confirm')).toBeNull();
-    expect(telegramPhaseLabel('something_else')).toBeNull();
+  it('shows tool usage explicitly with the tool name', () => {
+    expect(telegramStepLabel('tool_call', { toolName: 'web_search' })).toBe('🔧 Tool: web_search');
+    expect(telegramStepLabel('tool_call', { name: 'calc' })).toBe('🔧 Tool: calc');
+    expect(telegramStepLabel('tool_call')).toBe('🔧 Tool');
+  });
+
+  it('returns null for phases that should not add a step', () => {
+    expect(telegramStepLabel('guardian_confirm')).toBeNull();
+    expect(telegramStepLabel('something_else')).toBeNull();
+  });
+});
+
+describe('renderTelegramChecklist', () => {
+  it('is just the header when there are no steps', () => {
+    expect(renderTelegramChecklist([])).toBe(TELEGRAM_STATUS_HEADER);
+  });
+
+  it('marks completed steps ✓ and the current (last) step ⏳', () => {
+    const out = renderTelegramChecklist(['👁 Perception', '🔎 Searching memory', '🔧 Tool: web_search']);
+    expect(out).toContain('✓ 👁 Perception');
+    expect(out).toContain('✓ 🔎 Searching memory');
+    expect(out).toContain('⏳ 🔧 Tool: web_search');
+  });
+
+  it('elides the middle when the list exceeds the cap', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `step-${i}`);
+    const out = renderTelegramChecklist(many);
+    expect(out).toContain('…');
+    expect(out).toContain('⏳ step-19'); // last is still the current step
+    expect(out.split('\n').length).toBeLessThan(20);
   });
 });
 

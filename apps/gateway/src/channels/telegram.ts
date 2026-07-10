@@ -122,43 +122,75 @@ function formatTablesForTelegram(text: string): string {
   });
 }
 
-// --- Liveness / progress UX (TG-1 typing, TG-2 live status) ---
-export const TELEGRAM_INITIAL_STATUS = '🤔 Thinking…';
+// --- Liveness / progress UX (TG-1 typing, TG-2/TG-3 live status checklist) ---
+export const TELEGRAM_STATUS_HEADER = '🧠 Ontofelia is working…';
+export const TELEGRAM_INITIAL_STATUS = TELEGRAM_STATUS_HEADER;
 // Telegram throttles edits to the same message (~1/sec before 429); only edit
-// when the label actually changes and at most this often.
+// when the step list actually changes and at most this often.
 export const TELEGRAM_STATUS_EDIT_THROTTLE_MS = 1500;
 // Re-send the native "typing…" chat action on this cadence (it expires ~5s).
 export const TELEGRAM_TYPING_INTERVAL_MS = 4000;
+// Bound the checklist so a long tool loop can't grow the message unboundedly.
+export const TELEGRAM_MAX_STEPS = 12;
 
 /**
- * Map an agent onDebug phase to a short, human status label for the live
- * progress message. Returns null for phases that should not change the status
- * (e.g. guardian_confirm, which is handled separately, or unknown phases).
+ * Map an agent onDebug phase to a checklist step label (no trailing "…"; the
+ * ✓/⏳ marker conveys state). Covers both the cognitive-cycle phases
+ * (perception/goal_management/reflection) and the core LLM/tool phases, so the
+ * status shows the model's phases and tool usage explicitly. Returns null for
+ * phases that should not add a step (unknown phases; guardian is handled
+ * separately).
  */
-export function telegramPhaseLabel(phase: string, data?: unknown): string | null {
+export function telegramStepLabel(phase: string, data?: unknown): string | null {
   switch (phase) {
     case 'perception':
     case 'ner':
-      return '🔎 Reading your message…';
+      return '👁 Perception';
     case 'kg_context':
-      return '🔎 Searching memory…';
+      return '🔎 Searching memory';
+    case 'goal_management': {
+      const goalType = (data as { goalType?: string } | undefined)?.goalType;
+      return goalType ? `🎯 Goal: ${goalType}` : '🎯 Deliberation';
+    }
     case 'llm_call':
-      return '🧠 Reasoning…';
+      return '🧠 Reasoning';
     case 'tool_call': {
       const name = (data as { toolName?: string; name?: string } | undefined)?.toolName
         ?? (data as { name?: string } | undefined)?.name;
-      return name ? `🔧 Running tool: ${name}` : '🔧 Running tool…';
+      return name ? `🔧 Tool: ${name}` : '🔧 Tool';
     }
     case 'tool_result':
-      return '🧠 Processing result…';
-    case 'reflection':
-      return '🤔 Reflecting…';
+      return '🧩 Processing result';
     case 'llm_response':
     case 'final':
-      return '✍️ Writing answer…';
+      return '✍️ Writing answer';
+    case 'reflection':
+      return '🔍 Reflection';
     default:
       return null;
   }
+}
+
+/**
+ * Render the accumulating checklist: completed steps get ✓, the current (last)
+ * step gets ⏳. If it grows past the cap, the middle is elided.
+ */
+export function renderTelegramChecklist(steps: string[]): string {
+  if (steps.length === 0) return TELEGRAM_STATUS_HEADER;
+  let shown = steps;
+  let elided = false;
+  if (steps.length > TELEGRAM_MAX_STEPS) {
+    shown = [...steps.slice(0, 2), ...steps.slice(-(TELEGRAM_MAX_STEPS - 2))];
+    elided = true;
+  }
+  const lines = shown.map((label, i) => {
+    // The last shown line is always the current (in-progress) step; earlier
+    // ones are completed. (Holds in both the elided and non-elided cases.)
+    const isCurrent = i === shown.length - 1;
+    return `${isCurrent ? '⏳' : '✓'} ${label}`;
+  });
+  if (elided) lines.splice(2, 0, '   …');
+  return `${TELEGRAM_STATUS_HEADER}\n\n${lines.join('\n')}`;
 }
 
 export async function setupTelegramChannel(
@@ -308,7 +340,7 @@ export async function setupTelegramChannel(
       let typingTimer: ReturnType<typeof setInterval> | undefined;
       let statusMsgId: number | undefined;
       let removeDebug: (() => void) | undefined;
-      let lastLabel = '';
+      const steps: string[] = [];
       let lastEditAt = 0;
 
       const clearStatus = async () => {
@@ -317,6 +349,23 @@ export async function setupTelegramChannel(
           statusMsgId = undefined;
           await bot.deleteMessage(replyTarget, id).catch(() => {});
         }
+      };
+
+      // Render the accumulating checklist into the status message. Throttled
+      // (Telegram 429s on rapid edits); `force` bypasses the throttle for a
+      // step that must show immediately (e.g. the approval wait).
+      const renderStatus = (force = false) => {
+        if (!showProgress || !bot || statusMsgId === undefined) return;
+        const now = Date.now();
+        if (!force && now - lastEditAt < TELEGRAM_STATUS_EDIT_THROTTLE_MS) return;
+        lastEditAt = now;
+        bot.editMessageText(renderTelegramChecklist(steps), { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
+      };
+      // Append a step (skipping consecutive duplicates) and re-render.
+      const pushStep = (label: string, force = false) => {
+        if (steps[steps.length - 1] === label) return;
+        steps.push(label);
+        renderStatus(force);
       };
 
       try {
@@ -372,32 +421,22 @@ export async function setupTelegramChannel(
                 }
               }).catch((e) => logger.error('Guardian approval prompt failed to send: ' + (e as Error).message));
             }
-            // Reflect the approval wait so the status doesn't look stuck while
-            // the agent blocks for the user's Approve/Deny tap.
-            if (showProgress && bot && statusMsgId !== undefined) {
-              lastLabel = '⏳ Waiting for your approval…';
-              lastEditAt = Date.now();
-              bot.editMessageText(lastLabel, { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
-            }
+            // Reflect the approval wait as a checklist step (forced past the
+            // throttle) so it doesn't look stuck while the agent blocks for the
+            // user's Approve/Deny tap.
+            pushStep('🔐 Waiting for your approval', true);
             return;
           }
 
-          // TG-2: reflect the current phase in the live status message.
+          // TG-3: append the phase (cognitive-cycle + core LLM/tool) as a
+          // checklist step so the model's phases and tool usage show explicitly.
           // Known limitation: agent.onDebug is a shared bus with no per-message
-          // correlation id, so under truly concurrent messages to the same
-          // agent a chat may briefly show another chat's phase label. Cosmetic
-          // (right chat, wrong label); a real fix needs sessionId threaded
-          // through emitDebug — tracked as a follow-up on the TG-2 ticket.
+          // correlation id, so under truly concurrent messages to the same agent
+          // a chat may briefly show another chat's step; a real fix needs a
+          // sessionId threaded through emitDebug (tracked follow-up).
           if (showProgress && bot && statusMsgId !== undefined) {
-            const label = telegramPhaseLabel(event.phase, event.data);
-            if (label && label !== lastLabel) {
-              const now = Date.now();
-              if (now - lastEditAt >= TELEGRAM_STATUS_EDIT_THROTTLE_MS) {
-                lastLabel = label;
-                lastEditAt = now;
-                bot.editMessageText(label, { chat_id: replyTarget, message_id: statusMsgId }).catch(() => {});
-              }
-            }
+            const label = telegramStepLabel(event.phase, event.data);
+            if (label) pushStep(label);
           }
         });
 

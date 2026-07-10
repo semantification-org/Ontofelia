@@ -123,6 +123,12 @@ export interface RunCycleOptions {
    * constraint-pressure heuristic untouched.
    */
   selfModelEnabled?: boolean;
+  /**
+   * Optional real-time sink for the cognitive phases so a live status UI (e.g.
+   * the Telegram progress checklist) can show them explicitly. Best-effort and
+   * off the persistence path; failures are swallowed.
+   */
+  onPhase?: (phase: 'perception' | 'goal_management' | 'reflection', label: string, data?: unknown) => void;
 }
 
 /** A flagged impasse paired with the resolution its subcycle chose (F3). */
@@ -185,6 +191,10 @@ export class CycleManager {
     const cycleUri = `urn:${this.agentId}:cog:cycle:${cycleId}`;
     const startedAt = new Date();
     this.logger.info({ agent: this.agentId, cycleId, phase: 'perception' }, `cycle ${cycleId} started`);
+    const emitPhase = (phase: 'perception' | 'goal_management' | 'reflection', label: string, data?: unknown) => {
+      try { options.onPhase?.(phase, label, data); } catch { /* status UI is best-effort */ }
+    };
+    emitPhase('perception', 'Perception');
 
     // Buffer tool events so they can be written as episodes in temporal order
     // after the core completes (see writeEpisodicAndRetrieval). The closure is
@@ -212,6 +222,7 @@ export class CycleManager {
         goalConflict = managed.conflict;
         activeGoalUri = goal.uri;
         activeGoalType = goal.goalType;
+        emitPhase('goal_management', 'Deliberation', { goalType: goal.goalType });
         const sections = [this.renderActiveGoal(goal)];
         // E4 — bias action selection with learned skills for this goal type.
         if (options.proceduralEnabled) {
@@ -251,6 +262,7 @@ export class CycleManager {
       this.logger.error({ agent: this.agentId, cycleId, durationMs }, `cycle ${cycleId} aborted`);
     } else {
       this.logger.info({ agent: this.agentId, cycleId, phase: 'reflection', durationMs }, `cycle ${cycleId} completed in ${durationMs}ms`);
+      emitPhase('reflection', 'Reflection');
     }
 
     try {

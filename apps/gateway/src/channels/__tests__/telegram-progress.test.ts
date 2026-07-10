@@ -70,10 +70,11 @@ describe('Telegram liveness UX (setupTelegramChannel)', () => {
 
     // TG-1: typing indicator fired.
     expect(calls.some((c) => c === 'chatAction:typing')).toBe(true);
-    // TG-2: an initial status message was sent...
-    expect(calls.some((c) => c.startsWith('sendMessage:🤔'))).toBe(true);
-    // ...updated to a phase label...
-    expect(calls.some((c) => c.startsWith('edit:') && /🔎|🧠|🔧|✍️/.test(c))).toBe(true);
+    // TG-3: an initial status message (the checklist header) was sent...
+    expect(calls.some((c) => c.startsWith('sendMessage:🧠'))).toBe(true);
+    // ...updated to a checklist with a marked step (the cognitive Perception
+    // phase reaches the status)...
+    expect(calls.some((c) => c.startsWith('edit:') && /[⏳✓]/.test(c) && c.includes('Perception'))).toBe(true);
     // ...and removed before the final answer.
     const deleteIdx = calls.findIndex((c) => c === 'delete:4242');
     const answerIdx = calls.findIndex((c) => c.startsWith('sendMessage:Final answer'));
@@ -135,9 +136,9 @@ describe('Telegram liveness UX (setupTelegramChannel)', () => {
       timestamp: new Date().toISOString(), text: 'hi', mentions: [], attachments: [],
     });
 
-    // Typing still fires (always-on), but no 🤔 status message and no edits.
+    // Typing still fires (always-on), but no checklist status message and no edits.
     expect(calls.some((c) => c === 'chatAction:typing')).toBe(true);
-    expect(calls.some((c) => c.startsWith('sendMessage:🤔'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('sendMessage:🧠'))).toBe(false);
     expect(calls.some((c) => c.startsWith('edit:'))).toBe(false);
     expect(calls.some((c) => c.startsWith('sendMessage:Final answer'))).toBe(true);
   });

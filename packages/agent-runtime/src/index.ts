@@ -47,7 +47,11 @@ export type StreamChunk =
 
 export interface DebugEvent {
   timestamp: string;
-  phase: 'ner' | 'kg_context' | 'llm_call' | 'llm_response' | 'tool_call' | 'tool_result' | 'final' | 'error' | 'guardian_confirm' | 'guardian_denied';
+  phase: 'ner' | 'kg_context' | 'llm_call' | 'llm_response' | 'tool_call' | 'tool_result' | 'final' | 'error' | 'guardian_confirm' | 'guardian_denied'
+    // Cognitive-cycle phases (emitted by CycleManager when the flag is ON) so
+    // the live status UI can show the model's phases explicitly. comprehension
+    // is reserved/no-op; action+response are the LLM/tool activity above.
+    | 'perception' | 'goal_management' | 'reflection';
   label: string;
   data?: unknown;
 }
@@ -840,7 +844,12 @@ Users can use these commands:
           (recordTool, prepareGoals) => this.runCore(envelope, recordTool, prepareGoals),
           (r) => r.sessionId,
           (r) => r.text,
-          { goalsEnabled, proceduralEnabled, metacognitionEnabled, selfModelEnabled },
+          {
+            goalsEnabled, proceduralEnabled, metacognitionEnabled, selfModelEnabled,
+            // Surface the cognitive phases on the live debug stream so the
+            // status UI can show them explicitly alongside tool usage.
+            onPhase: (phase, label, data) => this.emitDebug(phase, label, data),
+          },
         );
       }
       return await this.runCore(envelope);
