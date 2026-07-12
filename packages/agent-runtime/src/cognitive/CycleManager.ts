@@ -129,6 +129,20 @@ export interface RunCycleOptions {
    * off the persistence path; failures are swallowed.
    */
   onPhase?: (phase: 'perception' | 'goal_management' | 'reflection', label: string, data?: unknown) => void;
+  /**
+   * Cycle mode (docs/initiative-architecture.md §6). `'conversational'` (the
+   * default) is byte-for-byte the prior behaviour. `'initiative'` runs an
+   * unattended cycle: Phase 3 does NOT seed the implicit RESPOND_TO_USER goal
+   * (there is no user to respond to) and Phase 6 records an initiative episode
+   * capturing the trigger, outcome and reason.
+   */
+  mode?: 'conversational' | 'initiative';
+  /**
+   * IRI of the goal that triggered this initiative cycle. In initiative mode
+   * this goal becomes the active context for Phase 3/4. Ignored in
+   * conversational mode.
+   */
+  initiativeGoalUri?: string;
 }
 
 /** A flagged impasse paired with the resolution its subcycle chose (F3). */
@@ -213,11 +227,12 @@ export class CycleManager {
     // Set when Phase 3 sees more than one substantive active goal — a
     // goal-conflict impasse signal for the metacognitive subcycle (F2).
     let goalConflict = false;
+    const mode = options.mode ?? 'conversational';
     const prepareGoals: GoalContextProvider = async (sessionId) => {
       if (!options.goalsEnabled) return undefined;
       try {
         const gs = new GoalStack(this.triplestore, this.registry, this.agentId, sessionId);
-        const managed = await this.manageGoals(gs, envelope);
+        const managed = await this.manageGoals(gs, envelope, mode, options.initiativeGoalUri);
         const goal = managed.goal;
         goalConflict = managed.conflict;
         activeGoalUri = goal.uri;
@@ -288,6 +303,8 @@ export class CycleManager {
         options.metacognitionEnabled === true,
         goalConflict,
         options.selfModelEnabled === true,
+        mode,
+        options.initiativeGoalUri,
       );
     } catch (persistErr) {
       this.onError?.(persistErr);
@@ -306,9 +323,27 @@ export class CycleManager {
   private async manageGoals(
     gs: GoalStack,
     envelope: MessageEnvelope,
+    mode: 'conversational' | 'initiative' = 'conversational',
+    initiativeGoalUri?: string,
   ): Promise<{ goal: Goal; conflict: boolean }> {
     const active = await gs.active();
     const substantives = active.filter((g) => g.goalType !== RESPOND_TO_USER);
+
+    // Initiative mode (docs/initiative-architecture.md §6): the triggering goal
+    // is the active context and the implicit RESPOND_TO_USER goal is NEVER
+    // seeded — there is no user to respond to.
+    if (mode === 'initiative') {
+      if (initiativeGoalUri) {
+        const triggering = await gs.get(initiativeGoalUri);
+        if (triggering) return { goal: triggering, conflict: substantives.length > 1 };
+      }
+      if (substantives.length > 0) return { goal: substantives[0], conflict: substantives.length > 1 };
+      if (active.length > 0) return { goal: active[0], conflict: false };
+      // No goal at all is not expected (the trigger came from a due wake); fall
+      // back to the implicit goal only as a last resort so the cycle can run.
+      return { goal: await gs.ensureImplicit(), conflict: false };
+    }
+
     // More than one substantive goal contending for the turn is a goal-conflict
     // signal; we still proceed with the highest-priority one (active() is
     // priority-ordered) but flag it for the metacognitive subcycle.
@@ -467,6 +502,8 @@ export class CycleManager {
     metacognitionEnabled = false,
     goalConflict = false,
     selfModelEnabled = false,
+    mode: 'conversational' | 'initiative' = 'conversational',
+    initiativeGoalUri?: string,
   ): Promise<void> {
     const perceptionPhaseUri = `${cycleUri}_1`;
     await this.writePerception(envelope, sessionId, cycleId, perceptionPhaseUri);
@@ -481,6 +518,22 @@ export class CycleManager {
       toolEvents,
       activeGoalUri,
     );
+    // Initiative episode (docs/initiative-architecture.md §6): one auditable
+    // record per unattended cycle — trigger, outcome and reason. Written only in
+    // initiative mode, so conversational persistence is byte-identical.
+    if (mode === 'initiative') {
+      await this.writeInitiativeEpisode(
+        envelope,
+        sessionId,
+        cycleId,
+        startedAt,
+        endedAt,
+        status,
+        responseText,
+        toolEvents,
+        activeGoalUri ?? initiativeGoalUri,
+      );
+    }
     if (proceduralEnabled) {
       // E3 — judge the *previous* cycle from this turn's inbound text, then
       // record this turn's traces. Order matters: backfill first so it targets
@@ -915,6 +968,54 @@ export class CycleManager {
       });
     }
     return { retrievalHits };
+  }
+
+  /**
+   * Initiative episode (docs/initiative-architecture.md §6). One episode per
+   * unattended cycle recording the trigger (the synthetic envelope text), the
+   * outcome (completed/aborted, whether a reply/notification was produced, how
+   * many tools ran) and the triggering goal. This is the audit trail for what
+   * the agent did while nobody was watching. Reuses EpisodicMemory, so it lands
+   * in the same `cog:episodic` graph as every other episode.
+   */
+  private async writeInitiativeEpisode(
+    envelope: MessageEnvelope,
+    sessionId: string,
+    cycleId: string,
+    startedAt: Date,
+    endedAt: Date,
+    status: 'completed' | 'aborted',
+    responseText: string | undefined,
+    toolEvents: ToolEpisodeEvent[],
+    goalUri?: string,
+  ): Promise<void> {
+    const em = new EpisodicMemory(this.triplestore, this.agentId);
+    const toolCalls = new Set(
+      toolEvents.filter((e) => e.phase === 'called').map((e) => e.callId),
+    ).size;
+    const outcome: 'success' | 'error' = status === 'completed' ? 'success' : 'error';
+    const reason =
+      status === 'aborted'
+        ? 'initiative cycle aborted (core delegation threw)'
+        : responseText
+          ? 'initiative cycle completed with output'
+          : toolCalls > 0
+            ? 'initiative cycle completed with tool action(s)'
+            : 'initiative cycle completed as a no-op';
+    const trigger = (envelope.text || '').trim();
+    const payload = `trigger: ${trigger || '(none)'} | outcome: ${reason} | tools: ${toolCalls}`;
+    await em.append({
+      episodeType: 'initiative',
+      occurredAt: endedAt,
+      sessionId,
+      cycleId,
+      channel: envelope.channel ? String(envelope.channel) : undefined,
+      actor: `urn:${this.agentId}:self#${this.agentId}`,
+      payload,
+      outcome,
+      partOfGoal: goalUri,
+      salience: 0.8,
+    });
   }
 
   /** B5 — Phase 1 perception: message text and sender onto the perception buffer. */

@@ -15,10 +15,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "postbuild": "node -e \"const fs=require('fs'),path=require('path');fs.mkdirSync('dist/scenarios',{recursive:true});fs.readdirSync('src/scenarios').filter(f=>f.endsWith('.json')).forEach(f=>fs.copyFileSync(path.join('src/scenarios',f),path.join('dist/scenarios',f)))\"",
+    "postbuild": "node -e \"const fs=require('fs'),path=require('path');for(const d of['scenarios','behavior/scenarios']){const src=path.join('src',d),dst=path.join('dist',d);fs.mkdirSync(dst,{recursive:true});fs.readdirSync(src).filter(f=>f.endsWith('.json')).forEach(f=>fs.copyFileSync(path.join(src,f),path.join(dst,f)))}\"",
     "test": "vitest run",
     "lint": "eslint src",
     "pilot": "node dist/pilot.js",
+    "behavior": "node dist/behaviorPilot.js",
     "score-kappa": "node dist/scoreKappa.js"
   },
   "dependencies": {

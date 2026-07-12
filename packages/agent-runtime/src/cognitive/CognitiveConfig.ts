@@ -126,6 +126,21 @@ export class CognitiveConfig {
     return this.setFlag('flagDebugPanel', enabled);
   }
 
+  /**
+   * Whether self-initiated (initiative) cycles are enabled (docs/initiative-
+   * architecture.md §5, §12). Defaults to `false`: with the flag off, goal
+   * wakes are hard no-ops in the dispatcher — the agent never acts unattended.
+   * This is the kill switch; it is never enabled by default.
+   */
+  async isInitiativeEnabled(): Promise<boolean> {
+    return this.isFlagEnabled('flagInitiative');
+  }
+
+  /** Set (or clear) the initiative flag in the setup graph. */
+  async setInitiativeEnabled(enabled: boolean): Promise<void> {
+    return this.setFlag('flagInitiative', enabled);
+  }
+
   /** Read one boolean `cog.<flag>` triple; `false` when absent or unparseable. */
   private async isFlagEnabled(flag: string): Promise<boolean> {
     const graph = GraphUriResolver.getSetupGraph(this.agentId);

@@ -9,7 +9,7 @@ import { ToolRegistry, AuditLog } from '@ontofelia/tools';
 import { ToolPolicyEngine } from '@ontofelia/security';
 import { SkillRegistry, SkillExecutor } from '@ontofelia/skills';
 import { PluginRegistry } from '@ontofelia/plugins';
-import { OxigraphAdapter, KnowledgeEngine, GraphRegistry, SelfModel } from '@ontofelia/semantic-memory';
+import { OxigraphAdapter, KnowledgeEngine, GraphRegistry, SelfModel, ReseedInvariantError } from '@ontofelia/semantic-memory';
 import type { TriplestoreAdapter } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as os from 'os';
@@ -133,6 +133,28 @@ describe('/reseed-persona command', () => {
     expect(res.text).toContain('unavailable');
     // Nothing changed.
     expect(await ask(`<${CORE}Ontofelia> <${CORE}personality> "old vibe"`)).toBe(true);
+  });
+
+  it('reports a tripped invariant as APPLIED with a concurrent-write warning, not as failed', async () => {
+    // The tripwire fires AFTER the atomic update commits, so the chat surface
+    // must not label the reseed as failed.
+    const message =
+      'Persona re-seed WAS applied (bootstrap triples 3 → 4), but the post-apply invariant ' +
+      'check found that preserved (non-bootstrap) triples changed (2 → 3) — most likely a ' +
+      'concurrent write to the self graph during the reseed, not a reseed failure. ' +
+      'Re-run the reseed to verify a stable result.';
+    ke.reseedSelf = async () => { throw new ReseedInvariantError(message); };
+
+    const res = await makeRuntime().handleMessage(env('/reseed-persona', true));
+    expect(res.text).toContain('WAS applied');
+    expect(res.text).toContain('Re-run the reseed');
+    expect(res.text).not.toContain('Persona re-seed failed');
+  });
+
+  it('reports any other reseed error as failed', async () => {
+    ke.reseedSelf = async () => { throw new Error('Bootstrap self.ttl is empty or missing: /x/self.ttl'); };
+    const res = await makeRuntime().handleMessage(env('/reseed-persona', true));
+    expect(res.text).toContain('Persona re-seed failed');
   });
 
   it('lists the command in /help only for the owner', async () => {

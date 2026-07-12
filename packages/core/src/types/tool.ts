@@ -56,6 +56,17 @@ export interface ToolContext {
     pruneMaxAgeDays?: number;
   };
   /**
+   * True when this tool runs inside an unattended initiative cycle
+   * (docs/initiative-architecture.md §5–§6, §8). Set by the runtime from
+   * `chatType === 'initiative'`; it is the SINGLE, authoritative signal for
+   * "nobody is watching". The execution chokepoint (ToolExecutor) uses it to
+   * hard-deny any tool outside the initiative allowlist, so an LLM that NAMES an
+   * unadvertised tool cannot run it unattended. Tools (e.g. notify_owner) also
+   * read it to distinguish initiative from conversational callers, rather than
+   * inferring it from `channelType === 'system'` (which the cron path also uses).
+   */
+  unattended?: boolean;
+  /**
    * Cancellation signal wired to the executor's per-call timeout. When a tool
    * exceeds its `timeoutMs`, the executor aborts this signal so long-running
    * work (child processes, network requests) can actually stop instead of

@@ -24,6 +24,23 @@ import { GraphRegistry, GraphUriResolver } from '@ontofelia/semantic-memory';
 const COGT = 'urn:shared:ontology#cog/';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Minimum recurring-wake interval (design §5). A `wakeEvery` faster than the
+ * per-goal cooldown can only ever churn (fire → cooldown-skip → re-arm → …), so
+ * it is rejected at write time. The default equals the 30-minute per-goal
+ * cooldown; callers may inject a different floor via the GoalStack constructor.
+ */
+export const DEFAULT_MIN_WAKE_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * Sanity ceiling for a wake interval (design §5). A duration that would push the
+ * next wake more than ~10 years out (or overflow the Date range) is almost
+ * certainly a mistake and is rejected rather than silently producing an
+ * Invalid Date that mis-schedules a wake far in the future.
+ */
+export const MAX_WAKE_INTERVAL_MS = 10 * 365 * MS_PER_DAY;
 
 /** Goal lifecycle states (doc 07 §3). */
 export type GoalStatus = 'proposed' | 'active' | 'blocked' | 'resolved' | 'abandoned';
@@ -34,6 +51,62 @@ const RESPOND_TO_USER_PRIORITY = 0.5;
 
 /** Opaque identifier (an IRI) of a goal. */
 export type GoalId = string;
+
+/**
+ * Consecutive initiative-cycle failures after which a goal is auto-blocked so
+ * it stops waking until a human or a conversation unblocks it (design §5).
+ */
+export const INITIATIVE_FAILURE_THRESHOLD = 3;
+
+/** Reason stamped on the goal when {@link GoalStack.recordWakeFailure} blocks it. */
+export const INITIATIVE_FAILURES_EXCEEDED = 'initiative-failures-exceeded';
+
+/**
+ * Add a *supported* ISO-8601 duration to a date. Grammar (a deliberate subset
+ * of ISO-8601 durations, documented in docs/initiative-architecture.md §5):
+ *
+ *   P[nD][T[nH][nM][nS]]   with at least one component present, e.g.
+ *     PT30M, PT2H, P1D, P1DT12H, PT90M, PT45S
+ *
+ * Weeks (`P1W`), months and years (`P1M`/`P1Y` — the date-part `M`/`Y`) are
+ * intentionally rejected: their length is not fixed, so a wake interval built
+ * from them would be ambiguous. Any string outside the grammar throws with a
+ * clear message rather than silently mis-scheduling a wake.
+ */
+export function iso8601DurationToMs(duration: string): number {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(duration.trim());
+  if (!m || (m[1] === undefined && m[2] === undefined && m[3] === undefined && m[4] === undefined)) {
+    throw new Error(
+      `Unsupported wake interval "${duration}". Supported ISO-8601 durations are ` +
+        `P[nD][T[nH][nM][nS]] with at least one component (e.g. PT30M, PT2H, P1D, P1DT12H). ` +
+        `Weeks, months and years are not supported because their length is not fixed.`,
+    );
+  }
+  const days = Number(m[1] ?? 0);
+  const hours = Number(m[2] ?? 0);
+  const minutes = Number(m[3] ?? 0);
+  const seconds = Number(m[4] ?? 0);
+  return ((days * 24 + hours) * 60 + minutes) * 60_000 + seconds * 1_000;
+}
+
+/**
+ * Add a supported ISO-8601 duration to a date. Throws for anything outside the
+ * grammar (see {@link iso8601DurationToMs}) AND for durations so large the
+ * result would overflow the Date range or land more than
+ * {@link MAX_WAKE_INTERVAL_MS} out — a huge in-grammar value like `P999999999D`
+ * previously produced a silent `Invalid Date` (design M1).
+ */
+export function addIso8601Duration(from: Date, duration: string): Date {
+  const ms = iso8601DurationToMs(duration);
+  const result = new Date(from.getTime() + ms);
+  if (Number.isNaN(result.getTime()) || ms > MAX_WAKE_INTERVAL_MS) {
+    throw new Error(
+      `Wake interval "${duration}" is out of range: a wake may be scheduled at ` +
+        `most ~10 years out. Use a shorter interval.`,
+    );
+  }
+  return result;
+}
 
 export interface GoalInput {
   goalType: string; // URI
@@ -50,6 +123,15 @@ export interface GoalInput {
   tags?: string[];
   /** Force promotion to the longterm graph at session close regardless of deadline. */
   longTerm?: boolean;
+  // ── Initiative wake policy (docs/initiative-architecture.md §5) ──
+  /** Absolute next wake (xsd:dateTime → cogt:wakeAt). */
+  wakeAt?: Date;
+  /** Recurring review interval, ISO-8601 duration (plain literal → cogt:wakeEvery). */
+  wakeEvery?: string;
+  /** IRI of the owner-utterance episode that mandates this goal (→ cogt:mandatedBy). */
+  mandatedBy?: string;
+  /** IRI of a drive this goal serves (→ cogt:servesDrive); optional anchoring. */
+  servesDrive?: string;
 }
 
 export interface Goal {
@@ -74,6 +156,14 @@ export interface Goal {
   currentStep?: string;
   stepProgress?: string;
   longTerm?: boolean;
+  // ── Initiative wake policy / tracking (docs/initiative-architecture.md §5) ──
+  wakeAt?: string;
+  wakeEvery?: string;
+  mandatedBy?: string;
+  servesDrive?: string;
+  lastWakeAt?: string;
+  wakeCount?: number;
+  consecutiveFailures?: number;
   tags: string[];
 }
 
@@ -92,12 +182,40 @@ function escapeLiteral(s: string): string {
 }
 
 export class GoalStack {
+  private readonly minWakeIntervalMs: number;
+
   constructor(
     private readonly triplestore: TriplestoreAdapter,
     private readonly registry: GraphRegistry,
     private readonly agentId: string,
     private readonly sessionId: string,
-  ) {}
+    /** Injectable floor for recurring wakes (design §5). Defaults to the cooldown. */
+    minWakeIntervalMs: number = DEFAULT_MIN_WAKE_INTERVAL_MS,
+  ) {
+    this.minWakeIntervalMs = minWakeIntervalMs;
+  }
+
+  /**
+   * Reject a `wakeEvery` that is malformed, below the minimum interval (would
+   * churn), or beyond the sanity ceiling (design B1/M1). Throws a clear error so
+   * a bad interval is refused at write time, never at the next wake.
+   */
+  private validateWakeEvery(wakeEvery: string): void {
+    const ms = iso8601DurationToMs(wakeEvery); // throws on bad grammar
+    if (ms < this.minWakeIntervalMs) {
+      throw new Error(
+        `Wake interval "${wakeEvery}" (${ms} ms) is below the minimum ` +
+          `${this.minWakeIntervalMs} ms (the per-goal cooldown). A recurring wake ` +
+          `faster than the cooldown can only churn (wake → cooldown-skip → re-arm).`,
+      );
+    }
+    if (ms > MAX_WAKE_INTERVAL_MS) {
+      throw new Error(
+        `Wake interval "${wakeEvery}" (${ms} ms) exceeds the maximum ` +
+          `${MAX_WAKE_INTERVAL_MS} ms (~10 years).`,
+      );
+    }
+  }
 
   sessionGraphUri(): string {
     return GraphUriResolver.getCogGoalsSessionGraph(this.agentId, this.sessionId);
@@ -137,6 +255,10 @@ export class GoalStack {
     const graph = this.sessionGraphUri();
     this.registry.assertWritable(graph);
 
+    // Reject an un-schedulable recurring interval before it is ever persisted
+    // (design B1/M1) — a goal created with wakeEvery below the floor would churn.
+    if (input.wakeEvery !== undefined) this.validateWakeEvery(input.wakeEvery);
+
     const uri = this.newGoalUri();
     const goalId = this.newGoalId(now);
     const status: GoalStatus = input.status ?? 'active';
@@ -168,6 +290,11 @@ export class GoalStack {
       lines.push(`<${uri}> <${COGT}currentStep> "${escapeLiteral(input.currentStep)}" .`);
     if (input.longTerm !== undefined)
       lines.push(`<${uri}> <${COGT}longTerm> "${input.longTerm}"^^<${XSD}boolean> .`);
+    if (input.wakeAt) lines.push(`<${uri}> <${COGT}wakeAt> ${dt(input.wakeAt.toISOString())} .`);
+    if (input.wakeEvery)
+      lines.push(`<${uri}> <${COGT}wakeEvery> "${escapeLiteral(input.wakeEvery)}" .`);
+    if (input.mandatedBy) lines.push(`<${uri}> <${COGT}mandatedBy> <${input.mandatedBy}> .`);
+    if (input.servesDrive) lines.push(`<${uri}> <${COGT}servesDrive> <${input.servesDrive}> .`);
     for (const t of input.tags ?? [])
       lines.push(`<${uri}> <${COGT}tags> "${escapeLiteral(t)}" .`);
 
@@ -222,6 +349,177 @@ export class GoalStack {
     );
     if (progress !== undefined)
       await this.replaceOne(graph, goalId, `${COGT}stepProgress`, `"${escapeLiteral(progress)}"`);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Initiative wake policy (docs/initiative-architecture.md §5). All writes
+  // route through replaceOne (single-valued) and assertWritable, exactly like
+  // the status/step mutators above.
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Set (or update) a goal's wake policy. When only `wakeEvery` is given and
+   * the goal has no `wakeAt` yet, the first wake is computed as `now + wakeEvery`
+   * so a recurring goal starts waking without a separate absolute seed.
+   */
+  async setWake(
+    goalId: GoalId,
+    policy: { wakeAt?: Date; wakeEvery?: string },
+    now: Date = new Date(),
+  ): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    const dt = (s: string) => `"${s}"^^<${XSD}dateTime>`;
+    if (policy.wakeEvery !== undefined) {
+      // Validate grammar, floor and ceiling up front so a bad interval is
+      // rejected at write time, not at the next wake (design B1/M1).
+      this.validateWakeEvery(policy.wakeEvery);
+      await this.replaceOne(graph, goalId, `${COGT}wakeEvery`, `"${escapeLiteral(policy.wakeEvery)}"`);
+    }
+    let wakeAt = policy.wakeAt;
+    if (!wakeAt && policy.wakeEvery !== undefined) {
+      const existing = await this.get(goalId);
+      if (!existing?.wakeAt) wakeAt = addIso8601Duration(now, policy.wakeEvery);
+    }
+    if (wakeAt) await this.replaceOne(graph, goalId, `${COGT}wakeAt`, dt(wakeAt.toISOString()));
+    await this.replaceOne(graph, goalId, `${COGT}updatedAt`, dt(now.toISOString()));
+  }
+
+  /**
+   * Record that a goal just woke: stamp `lastWakeAt`, bump `wakeCount`, and
+   * roll the next `wakeAt` forward by `wakeEvery`. A one-shot wake (no
+   * `wakeEvery`) has its `wakeAt` cleared so it does not fire again.
+   */
+  async recordWake(goalId: GoalId, now: Date = new Date()): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    const goal = await this.get(goalId);
+    if (!goal) return;
+    const dt = (s: string) => `"${s}"^^<${XSD}dateTime>`;
+    await this.replaceOne(graph, goalId, `${COGT}lastWakeAt`, dt(now.toISOString()));
+    const count = (goal.wakeCount ?? 0) + 1;
+    await this.replaceOne(graph, goalId, `${COGT}wakeCount`, `"${count}"^^<${XSD}integer>`);
+    if (goal.wakeEvery) {
+      const next = addIso8601Duration(now, goal.wakeEvery);
+      await this.replaceOne(graph, goalId, `${COGT}wakeAt`, dt(next.toISOString()));
+    } else {
+      await this.deleteOne(graph, goalId, `${COGT}wakeAt`);
+    }
+    await this.replaceOne(graph, goalId, `${COGT}updatedAt`, dt(now.toISOString()));
+  }
+
+  /**
+   * Record a failed initiative cycle for a goal. Increments
+   * `consecutiveFailures`; on reaching {@link INITIATIVE_FAILURE_THRESHOLD} the
+   * goal transitions to `blocked` with reason
+   * {@link INITIATIVE_FAILURES_EXCEEDED} so it stops waking until unblocked.
+   * Returns the new failure count.
+   */
+  async recordWakeFailure(goalId: GoalId, now: Date = new Date()): Promise<number> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return 0;
+    this.registry.assertWritable(graph);
+    const goal = await this.get(goalId);
+    if (!goal) return 0;
+    const failures = (goal.consecutiveFailures ?? 0) + 1;
+    await this.replaceOne(graph, goalId, `${COGT}consecutiveFailures`, `"${failures}"^^<${XSD}integer>`);
+    await this.replaceOne(
+      graph,
+      goalId,
+      `${COGT}updatedAt`,
+      `"${now.toISOString()}"^^<${XSD}dateTime>`,
+    );
+    if (failures >= INITIATIVE_FAILURE_THRESHOLD) {
+      await this.setStatus(goalId, 'blocked', INITIATIVE_FAILURES_EXCEEDED, now);
+    }
+    return failures;
+  }
+
+  /** Reset the consecutive-failure counter after a successful initiative cycle. */
+  async clearWakeFailures(goalId: GoalId, now: Date = new Date()): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    await this.deleteOne(graph, goalId, `${COGT}consecutiveFailures`);
+    await this.replaceOne(
+      graph,
+      goalId,
+      `${COGT}updatedAt`,
+      `"${now.toISOString()}"^^<${XSD}dateTime>`,
+    );
+  }
+
+  /**
+   * Initiative-eligible goals whose wake is due at `now` (design §5, §12): the
+   * single source of truth for eligibility. A goal wakes only when it is
+   * `active`, carries a *structurally valid* owner mandate ({@link isMandateValid}
+   * — the mandate gate), and its `cogt:wakeAt` is at or before `now`. Built by
+   * filtering {@link wakingGoals} so there is exactly one eligibility path.
+   */
+  async dueWakes(now: Date = new Date()): Promise<Goal[]> {
+    const nowMs = now.getTime();
+    return (await this.wakingGoals()).filter(
+      (g) => g.wakeAt !== undefined && Date.parse(g.wakeAt) <= nowMs,
+    );
+  }
+
+  /**
+   * All initiative-eligible goals that carry a wake policy (active + a valid
+   * owner mandate + `cogt:wakeAt` present), regardless of whether the wake is
+   * yet due. This is the one eligibility gate: {@link dueWakes} filters it by
+   * time and {@link onWake} re-checks the same {@link isMandateValid} predicate.
+   * Ordered earliest-first.
+   */
+  async wakingGoals(): Promise<Goal[]> {
+    const goals = await this.readWhere(`
+      ?goal <${COGT}goalStatus> "active" ;
+            <${COGT}mandatedBy> ?mandate ;
+            <${COGT}wakeAt> ?wake .`);
+    const candidates = goals.filter((g) => g.wakeAt !== undefined && g.mandatedBy !== undefined);
+    const eligible: Goal[] = [];
+    for (const g of candidates) {
+      if (await this.isMandateValid(g.mandatedBy)) eligible.push(g);
+    }
+    return eligible.sort((a, b) => Date.parse(a.wakeAt!) - Date.parse(b.wakeAt!));
+  }
+
+  /**
+   * Mandate gate (design §5, decision §12.3). A goal is initiative-eligible only
+   * if its `cogt:mandatedBy` resolves to a *real owner utterance episode*: a
+   * subject in the episodic graph that (a) is typed `cogt:Episode`, (b) is a
+   * `message-received` episode (an inbound utterance, not agent-authored output),
+   * and (c) is attributed to a sender other than the agent's own self entity. A
+   * fabricated/non-existent IRI, a non-episode subject (e.g. a drive or goal),
+   * or an initiative-/agent-authored episode therefore all fail — closing the
+   * self-mandate escape where a self-inferred goal invents its own mandate.
+   *
+   * Residual gap (flagged per design §5): the episodic model records the sender
+   * entity (`urn:entity:agent-sender:<id>`) but does NOT persist the
+   * `isOwner` bit, so this validates "inbound human utterance, not self-authored"
+   * rather than strictly "the OWNER". Distinguishing owner from any other
+   * inbound sender needs an owner marker on the episode (or an allowlist check)
+   * and is left as a follow-up; the primary v1 threat (self-mandate) is closed.
+   */
+  async isMandateValid(mandatedBy: string | undefined): Promise<boolean> {
+    if (!mandatedBy) return false;
+    const graph = GraphUriResolver.getCogEpisodicGraph(this.agentId);
+    const selfActor = `urn:${this.agentId}:self#${this.agentId}`;
+    const res = await this.triplestore.query(`
+      SELECT ?type ?actor WHERE {
+        GRAPH <${graph}> {
+          <${mandatedBy}> a <${COGT}Episode> ;
+                          <${COGT}episodeType> ?type .
+          OPTIONAL { <${mandatedBy}> <${COGT}actor> ?actor . }
+        }
+      } LIMIT 1`);
+    const b = res.bindings?.[0];
+    if (!b) return false; // (a) non-existent IRI or (b) not a cogt:Episode
+    if (b.type?.value !== 'message-received') return false; // not an inbound utterance
+    const actor = b.actor?.value;
+    if (!actor || actor === selfActor) return false; // (c) agent/initiative-authored
+    return true;
   }
 
   /** The single top active goal across both goal graphs, or null if none. */
@@ -299,6 +597,13 @@ export class GoalStack {
       INSERT DATA { GRAPH <${graph}> { <${uri}> <${predicate}> ${objectTerm} . } }`);
   }
 
+  /** Delete every value of a single-valued predicate on a goal (clears it). */
+  private async deleteOne(graph: string, uri: GoalId, predicate: string): Promise<void> {
+    await this.triplestore.update(`
+      DELETE { GRAPH <${graph}> { <${uri}> <${predicate}> ?old } }
+      WHERE  { GRAPH <${graph}> { <${uri}> <${predicate}> ?old } }`);
+  }
+
   /** Which goal graph holds `uri` (session preferred), or undefined if neither. */
   private async graphOf(uri: GoalId): Promise<string | undefined> {
     for (const graph of this.goalGraphs()) {
@@ -323,6 +628,8 @@ export class GoalStack {
              ?successCriterion ?deadline ?resolvedAt ?abandonedAt ?blockedReason
              ?parentGoal ?triggeredByEpisode ?triggeredByUser ?plannedSteps
              ?currentStep ?stepProgress ?longTerm
+             ?wakeAt ?wakeEvery ?mandatedBy ?servesDrive ?lastWakeAt ?wakeCount
+             ?consecutiveFailures
       WHERE {
         GRAPH <${graph}> {
           ?goal a <${COGT}Goal> ;
@@ -346,6 +653,13 @@ export class GoalStack {
           OPTIONAL { ?goal <${COGT}currentStep>        ?currentStep . }
           OPTIONAL { ?goal <${COGT}stepProgress>       ?stepProgress . }
           OPTIONAL { ?goal <${COGT}longTerm>           ?longTerm . }
+          OPTIONAL { ?goal <${COGT}wakeAt>             ?wakeAt . }
+          OPTIONAL { ?goal <${COGT}wakeEvery>          ?wakeEvery . }
+          OPTIONAL { ?goal <${COGT}mandatedBy>         ?mandatedBy . }
+          OPTIONAL { ?goal <${COGT}servesDrive>        ?servesDrive . }
+          OPTIONAL { ?goal <${COGT}lastWakeAt>         ?lastWakeAt . }
+          OPTIONAL { ?goal <${COGT}wakeCount>          ?wakeCount . }
+          OPTIONAL { ?goal <${COGT}consecutiveFailures> ?consecutiveFailures . }
         }
       }`;
     const res = await this.triplestore.query(sparql);
@@ -376,6 +690,13 @@ export class GoalStack {
       if (r.currentStep) goal.currentStep = r.currentStep.value;
       if (r.stepProgress) goal.stepProgress = r.stepProgress.value;
       if (r.longTerm) goal.longTerm = r.longTerm.value === 'true';
+      if (r.wakeAt) goal.wakeAt = r.wakeAt.value;
+      if (r.wakeEvery) goal.wakeEvery = r.wakeEvery.value;
+      if (r.mandatedBy) goal.mandatedBy = r.mandatedBy.value;
+      if (r.servesDrive) goal.servesDrive = r.servesDrive.value;
+      if (r.lastWakeAt) goal.lastWakeAt = r.lastWakeAt.value;
+      if (r.wakeCount) goal.wakeCount = Number(r.wakeCount.value);
+      if (r.consecutiveFailures) goal.consecutiveFailures = Number(r.consecutiveFailures.value);
       return goal;
     });
   }

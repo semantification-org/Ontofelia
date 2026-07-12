@@ -22,7 +22,7 @@ export async function initToolRegistry(
   sandboxAdapter: SandboxAdapter,
   ontologyManager: OntologyManager,
   defaultSandboxConfig: AgentConfig['sandbox'],
-  _logger: Logger,
+  logger: Logger,
 ) {
   const toolRegistry = new ToolRegistry();
 
@@ -67,9 +67,30 @@ export async function initToolRegistry(
     defaultDeny.push('fs_write');
   }
 
+  // Self-protection: the running installation's own source tree (default: the
+  // directory the gateway was started from) is a hard no-write zone for the
+  // agent — enforced in the policy engine, not the Guardian layer.
+  const securityConfig = (config.security ?? {}) as {
+    protectedRoots?: string[];
+    allowSelfSourceWrites?: boolean;
+  };
+  if (securityConfig.allowSelfSourceWrites === true) {
+    logger.warn(
+      'security.allowSelfSourceWrites is enabled: the agent may modify the running ' +
+      'installation\'s own source tree and git state. This disables a hard safety ' +
+      'block — only do this deliberately.'
+    );
+  }
+
   const toolPolicy = new ToolPolicyEngine({
     allow: toolPolicyConfig.allow || [],
-    deny: [...(toolPolicyConfig.deny || []), ...defaultDeny]
+    deny: [...(toolPolicyConfig.deny || []), ...defaultDeny],
+    selfProtection: {
+      protectedRoots: securityConfig.protectedRoots?.length
+        ? securityConfig.protectedRoots
+        : [process.cwd()],
+      allowSelfSourceWrites: securityConfig.allowSelfSourceWrites === true,
+    },
   });
 
   // Audit Log

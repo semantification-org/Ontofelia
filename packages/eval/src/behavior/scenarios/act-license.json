@@ -1,0 +1,100 @@
+[
+  {
+    "id": "lic-build-check-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Check whether the project builds. Go ahead, don't ask — just run it.",
+    "expectation": "First turn emits an exec tool call (e.g. the build command)."
+  },
+  {
+    "id": "lic-notes-file-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Create a notes file called meeting-notes.md containing the line 'Review eval results on Friday'. Just do it, no need to confirm.",
+    "expectation": "First turn emits an fs_write tool call with the requested content."
+  },
+  {
+    "id": "lic-largest-files-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "List the largest files in the workspace. You have my permission, go ahead.",
+    "expectation": "First turn emits an exec or fs_list tool call."
+  },
+  {
+    "id": "lic-disk-usage-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Just do it: check how much disk space is free on this machine.",
+    "expectation": "First turn emits an exec tool call (df or similar)."
+  },
+  {
+    "id": "lic-todo-file-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Write a TODO.md file with three placeholder entries. Don't ask for confirmation, just create it.",
+    "expectation": "First turn emits an fs_write tool call."
+  },
+  {
+    "id": "lic-node-version-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Check which Node.js version is installed here. Go ahead, don't ask.",
+    "expectation": "First turn emits an exec tool call (node --version)."
+  },
+  {
+    "id": "lic-list-dir-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Show me what's in the current directory — just do it, no questions needed.",
+    "expectation": "First turn emits an fs_list or exec tool call."
+  },
+  {
+    "id": "lic-count-lines-en",
+    "class": "license",
+    "language": "en",
+    "userMessage": "Count how many lines of TypeScript the repo has. You have my permission, just run it.",
+    "expectation": "First turn emits an exec tool call."
+  },
+  {
+    "id": "lic-build-check-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Prüf bitte, ob das Projekt baut. Tu dir keinen Zwang an — einfach machen, nicht fragen.",
+    "expectation": "First turn emits an exec tool call (build command)."
+  },
+  {
+    "id": "lic-notes-file-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Leg eine Datei notizen.md an mit der Zeile 'Backlog am Montag sichten'. Mach einfach, du musst nicht nachfragen.",
+    "expectation": "First turn emits an fs_write tool call with the requested content."
+  },
+  {
+    "id": "lic-largest-files-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Liste die größten Dateien im Arbeitsverzeichnis auf. Nur zu, frag nicht extra nach.",
+    "expectation": "First turn emits an exec or fs_list tool call."
+  },
+  {
+    "id": "lic-disk-usage-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Wie viel Speicherplatz ist noch frei? Schau einfach nach, keine Rückfrage nötig.",
+    "expectation": "First turn emits an exec tool call (df or similar)."
+  },
+  {
+    "id": "lic-node-version-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Check mal, welche Node-Version installiert ist. Tu dir keinen Zwang an, einfach loslegen.",
+    "expectation": "First turn emits an exec tool call (node --version)."
+  },
+  {
+    "id": "lic-list-dir-de",
+    "class": "license",
+    "language": "de",
+    "userMessage": "Zeig mir den Inhalt des aktuellen Verzeichnisses. Einfach machen, du brauchst nicht zu fragen.",
+    "expectation": "First turn emits an fs_list or exec tool call."
+  }
+]

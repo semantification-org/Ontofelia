@@ -9,12 +9,30 @@ import { FactInput, FactContext, StoreResult, ConsistencyResult } from './types.
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
 const CORE_NS = 'urn:ontofelia:core#';
+const COGT_NS = 'urn:shared:ontology#cog/';
 const TBOX_GRAPH = 'urn:shared:ontology';
+const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
 
 // Monotonic per-process suffix for reseedSelf's throwaway staging graph, so two
 // concurrent re-seeds (e.g. the HTTP endpoint and the /reseed-persona command)
 // never share — and thus never DROP — each other's staging graph.
 let reseedTmpSeq = 0;
+
+/**
+ * Thrown by {@link KnowledgeEngine.reseedSelf} when the post-apply tripwire
+ * detects that the preserved (non-bootstrap-subject) triples changed during
+ * the operation. IMPORTANT: the reseed itself HAS been applied when this is
+ * thrown — the tripwire runs after the atomic update commits. It signals a
+ * concurrent-write anomaly on the self graph, not a failed reseed; callers
+ * should report the persona as updated and advise re-running the reseed to
+ * verify a stable state.
+ */
+export class ReseedInvariantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReseedInvariantError';
+  }
+}
 
 // Standard RDF/RDFS/OWL vocabulary URIs.
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -1382,6 +1400,102 @@ export class KnowledgeEngine {
     }));
   }
 
+  /** Query a named graph and return subject/predicate/value triples */
+  private async queryGraphTriples(graphUri: string): Promise<Array<{ subject: string; predicate: string; value: string }>> {
+    const sparql = `
+      SELECT ?s ?p ?o WHERE {
+        GRAPH <${graphUri}> { ?s ?p ?o }
+      }
+    `;
+    const result = await this.triplestore.query(sparql);
+    if (result.type !== 'bindings' || !result.bindings) return [];
+    return result.bindings.map(b => ({
+      subject: b.s?.value || '',
+      predicate: b.p?.value || '',
+      value: b.o?.value || ''
+    }));
+  }
+
+  /**
+   * Subjects that LOOK like behavior directives — typed
+   * `onto:BehaviorDirective` or carrying `onto:directiveText` — regardless of
+   * whether the agent links to them. Used to keep directive-shaped triples
+   * out of the generic identity bullets: an UNLINKED directive individual
+   * renders nowhere (not as a directive, not as a flat bullet).
+   */
+  private directiveLikeSubjects(triples: Array<{ subject: string; predicate: string; value: string }>): Set<string> {
+    const subjects = new Set<string>();
+    for (const t of triples) {
+      if (t.predicate === `${CORE_NS}directiveText`) subjects.add(t.subject);
+      if (t.predicate === RDF_TYPE && t.value === `${CORE_NS}BehaviorDirective`) subjects.add(t.subject);
+    }
+    return subjects;
+  }
+
+  /** Drive-shaped counterpart of {@link directiveLikeSubjects}. */
+  private driveLikeSubjects(triples: Array<{ subject: string; predicate: string; value: string }>): Set<string> {
+    const subjects = new Set<string>();
+    for (const t of triples) {
+      if (t.predicate === `${COGT_NS}driveStatement`) subjects.add(t.subject);
+      if (t.predicate === RDF_TYPE && t.value === `${COGT_NS}Drive`) subjects.add(t.subject);
+    }
+    return subjects;
+  }
+
+  /**
+   * Extract `onto:BehaviorDirective` individuals from self-graph triples.
+   * A subject counts as a directive only when it is BOTH directive-shaped
+   * (typed as such or carrying `onto:directiveText`) AND linked from the
+   * agent via `onto:hasDirective` — an unlinked `directiveText` triple
+   * (e.g. injected without the linking triple) never renders. Graphs from
+   * before the directive model simply yield an empty list (fallback:
+   * nothing changes for them).
+   */
+  private extractDirectives(triples: Array<{ subject: string; predicate: string; value: string }>): Array<{
+    subject: string; text: string; bindingness: string; priority: number; scope: string; label: string;
+  }> {
+    const linked = new Set(
+      triples.filter(t => t.predicate === `${CORE_NS}hasDirective`).map(t => t.value),
+    );
+    const subjects = [...this.directiveLikeSubjects(triples)].filter(s => linked.has(s));
+    return subjects.map(subject => {
+      const of = (predicate: string) => triples.find(t => t.subject === subject && t.predicate === predicate)?.value;
+      const priority = Number.parseFloat(of(`${CORE_NS}directivePriority`) ?? '');
+      return {
+        subject,
+        text: of(`${CORE_NS}directiveText`) ?? '',
+        bindingness: of(`${CORE_NS}bindingness`) ?? 'descriptive',
+        priority: Number.isFinite(priority) ? priority : 0,
+        scope: of(`${CORE_NS}directiveScope`) ?? '',
+        label: of(RDFS_LABEL) ?? '',
+      };
+    });
+  }
+
+  /**
+   * Extract `cogt:Drive` individuals (intrinsic motivation) from self-graph
+   * triples. Same linkage requirement (`onto:hasDrive` from the agent) and
+   * fallback semantics as {@link extractDirectives}.
+   */
+  private extractDrives(triples: Array<{ subject: string; predicate: string; value: string }>): Array<{
+    subject: string; label: string; statement: string; rank: number;
+  }> {
+    const linked = new Set(
+      triples.filter(t => t.predicate === `${CORE_NS}hasDrive`).map(t => t.value),
+    );
+    const subjects = [...this.driveLikeSubjects(triples)].filter(s => linked.has(s));
+    return subjects.map(subject => {
+      const of = (predicate: string) => triples.find(t => t.subject === subject && t.predicate === predicate)?.value;
+      const rank = Number.parseFloat(of(`${COGT_NS}driveRank`) ?? '');
+      return {
+        subject,
+        label: of(`${COGT_NS}driveLabel`) || this.predicateToLabel(subject),
+        statement: of(`${COGT_NS}driveStatement`) ?? '',
+        rank: Number.isFinite(rank) ? rank : 0,
+      };
+    });
+  }
+
   /** Convert a predicate URI to a human-readable label */
   private predicateToLabel(uri: string): string {
     // Extract local name from URI (e.g. urn:ontofelia:core#personality → personality)
@@ -1395,6 +1509,20 @@ export class KnowledgeEngine {
   /**
    * Read self, setup, and user Named Graphs and serialize them
    * to a natural-language system prompt section.
+   *
+   * Three-tier persona rendering:
+   *   1. "My Identity & Personality" — plain identity facts as flat bullets
+   *      (as always), plus DESCRIPTIVE behavior directives as short bullets.
+   *   2. "What drives me" — `cogt:Drive` individuals ordered by rank,
+   *      first-person label + statement (rdfs:comment elaborations are not
+   *      rendered, to keep the prompt lean).
+   *   3. BINDING directives are NOT rendered here; the runtime appends them
+   *      at the very end of the system prompt via
+   *      {@link getBindingBehaviorSection} (recency dominates).
+   *
+   * Fallback: a self graph without directive/drive individuals (an old,
+   * un-reseeded installation) renders exactly as before — one flat bullet
+   * list, no drives section.
    */
   async getSystemPromptContext(agentId: string, userId: string): Promise<string> {
     const sections: string[] = [];
@@ -1402,22 +1530,51 @@ export class KnowledgeEngine {
     const selfGraph = GraphUriResolver.getSelfGraph(agentId);
     const userGraph = GraphUriResolver.getUserGraph(agentId, userId);
 
-    // Self graph → identity and personality
+    // Self graph → identity, descriptive directives, drives
     try {
-      const selfFacts = await this.queryGraphFacts(selfGraph);
-      if (selfFacts.length > 0) {
+      const selfTriples = await this.queryGraphTriples(selfGraph);
+      if (selfTriples.length > 0) {
+        const directives = this.extractDirectives(selfTriples);
+        const drives = this.extractDrives(selfTriples);
+        // Directive/drive individuals render in their own tiers; keep their
+        // triples (and the linking triples) out of the generic bullets. The
+        // exclusion uses the SHAPE-based subject sets (not the linked-only
+        // extraction results) so an unlinked directive/drive individual is
+        // excluded here too — it renders nowhere at all.
+        const tierSubjects = new Set<string>([
+          ...this.directiveLikeSubjects(selfTriples),
+          ...this.driveLikeSubjects(selfTriples),
+        ]);
+        const selfFacts = selfTriples.filter(t =>
+          !tierSubjects.has(t.subject) &&
+          t.predicate !== `${CORE_NS}hasDirective` &&
+          t.predicate !== `${CORE_NS}hasDrive`
+        );
+
         const greetingFact = selfFacts.find(f => f.predicate.includes('greetingTemplate') || f.predicate.includes('greeting'));
         const capabilities = selfFacts
           .filter(f => f.predicate.includes('capability'))
           .map(f => `- ${f.value}`);
-        const personality = selfFacts
+        const personalityBullets = selfFacts
           .filter(f => !f.predicate.includes('greeting') && !f.predicate.includes('capability') && !f.predicate.includes('rdf-syntax-ns#type'))
-          .map(f => `- ${this.predicateToLabel(f.predicate)}: ${f.value}`)
-          .join('\n');
-        
+          .map(f => `- ${this.predicateToLabel(f.predicate)}: ${f.value}`);
+        // Descriptive directives join the identity tier as short bullets.
+        const descriptiveBullets = directives
+          .filter(d => d.bindingness !== 'binding' && d.text)
+          .sort((a, b) => (b.priority - a.priority) || a.subject.localeCompare(b.subject))
+          .map(d => `- ${d.label || d.scope || 'behavior'}: ${d.text}`);
+        const personality = [...personalityBullets, ...descriptiveBullets].join('\n');
+
         sections.push(`## My Identity & Personality\n${personality}`);
         if (capabilities.length > 0) {
           sections.push(`### My Capabilities\n${capabilities.join('\n')}`);
+        }
+        const driveLines = drives
+          .filter(d => d.statement)
+          .sort((a, b) => (b.rank - a.rank) || a.subject.localeCompare(b.subject))
+          .map(d => `- **${d.label}**: ${d.statement}`);
+        if (driveLines.length > 0) {
+          sections.push(`## What drives me\n${driveLines.join('\n')}`);
         }
         if (greetingFact) {
           sections.push(`## Greeting Text for New Users\n${greetingFact.value}`);
@@ -1459,6 +1616,46 @@ export class KnowledgeEngine {
     } catch { /* ignored */ }
 
     return sections.join('\n\n');
+  }
+
+  /**
+   * Render ONLY the binding behavior directives of the self graph as a
+   * numbered imperative list. The runtime appends this at the VERY END of the
+   * system prompt — after every other section — because recency dominates:
+   * an instruction-tuned model treats the last block it reads as binding,
+   * where the same text buried among identity bullets reads as a character
+   * trait.
+   *
+   * Ordering: safety-scope directives always come first (they cannot be
+   * demoted by priority values), then descending `onto:directivePriority`.
+   *
+   * Fallback: returns '' when the self graph carries no binding directives
+   * (old, un-reseeded installations) or on any query error — the prompt is
+   * then byte-identical to the pre-directive assembly.
+   */
+  async getBindingBehaviorSection(agentId: string): Promise<string> {
+    try {
+      const selfGraph = GraphUriResolver.getSelfGraph(agentId);
+      const triples = await this.queryGraphTriples(selfGraph);
+      const binding = this.extractDirectives(triples)
+        .filter(d => d.bindingness === 'binding' && d.text)
+        .sort((a, b) => {
+          const safety = Number(b.scope === 'safety') - Number(a.scope === 'safety');
+          if (safety !== 0) return safety;
+          return (b.priority - a.priority) || a.subject.localeCompare(b.subject);
+        });
+      if (binding.length === 0) return '';
+      const lines = binding.map((d, i) => `${i + 1}. ${d.text}`);
+      return `## Binding behavior (follow these over your defaults)\n${lines.join('\n')}`;
+    } catch (e) {
+      // Returning '' silently degrades the prompt (the binding block just
+      // disappears), so make the failure observable before falling back.
+      console.warn(
+        `getBindingBehaviorSection failed for agent "${agentId}"; omitting binding block from prompt:`,
+        (e as Error).message ?? e,
+      );
+      return '';
+    }
   }
 
   /**
@@ -1693,8 +1890,13 @@ export class KnowledgeEngine {
    * self graph. So ownership is decided by SUBJECT: this reseed replaces only
    * the triples whose subject the file declares, and leaves every other triple
    * (the learned self-model, and anything else) untouched — regardless of which
-   * predicates a future `self.ttl` uses. The non-bootstrap triple count is
-   * checked identical before and after as a tripwire.
+   * predicates a future `self.ttl` uses. The full SET of non-bootstrap triples
+   * is checked identical before and after as a tripwire; the check runs AFTER
+   * the atomic update commits, so a tripped wire means "applied, but a
+   * concurrent write happened", never "not applied" (see
+   * {@link ReseedInvariantError}). Blank-node subjects in the file are
+   * rejected before any mutation: subject ownership cannot be tracked across
+   * loads for blank nodes (each parse mints fresh ones).
    *
    * Atomicity: the delete and insert run as ONE SPARQL DELETE/INSERT/WHERE, so
    * a concurrent read never observes a persona-less graph and a crash cannot
@@ -1729,11 +1931,25 @@ export class KnowledgeEngine {
       return Number.isFinite(n) ? n : 0;
     };
     const countTotal = () => count(`GRAPH <${selfGraph}> { ?s ?p ?o }`);
-    // "Bootstrap-owned" = a self triple whose subject the staged file declares.
-    // The learned self-model uses a different subject, so it is never counted.
-    const countBootstrap = () => count(
-      `GRAPH <${selfGraph}> { ?s ?p ?o } FILTER EXISTS { GRAPH <${tmpGraph}> { ?s ?x ?y } }`,
-    );
+    // "Preserved" = a self triple whose subject the staged file does NOT
+    // declare (the learned self-model and anything else not bootstrap-owned).
+    // Captured as a full set of term-identity keys — not just a count — so the
+    // tripwire also catches swaps that leave the count unchanged. Same single
+    // query pass over the graph as the previous COUNT variant.
+    const termKey = (t?: { type: string; value: string; datatype?: string; language?: string }): string =>
+      t ? `${t.type}|${t.value}|${t.datatype ?? ''}|${t.language ?? ''}` : '';
+    const selectPreserved = async (): Promise<Set<string>> => {
+      const res = await this.triplestore.query(`
+        SELECT ?s ?p ?o WHERE {
+          GRAPH <${selfGraph}> { ?s ?p ?o }
+          FILTER NOT EXISTS { GRAPH <${tmpGraph}> { ?s ?x ?y } }
+        }`);
+      const set = new Set<string>();
+      for (const b of (res.type === 'bindings' ? res.bindings ?? [] : [])) {
+        set.add(`${termKey(b.s)} ${termKey(b.p)} ${termKey(b.o)}`);
+      }
+      return set;
+    };
 
     // Clear any leftover staging graph, then parse the file into it (reusing the
     // Turtle parser). putGraph is inside the try so a parse error still cleans up.
@@ -1741,9 +1957,25 @@ export class KnowledgeEngine {
     try {
       await this.triplestore.putGraph(tmpGraph, ttl, 'turtle');
 
+      // Reject blank-node subjects BEFORE any mutation of the self graph:
+      // ownership is decided by subject, and a blank node cannot be matched
+      // across loads (every parse mints fresh blank nodes), so such triples
+      // would accumulate on every reseed instead of being replaced.
+      const blank = await this.triplestore.query(
+        `SELECT ?s WHERE { GRAPH <${tmpGraph}> { ?s ?p ?o } FILTER isBlank(?s) } LIMIT 1`,
+      );
+      if (blank.type === 'bindings' && (blank.bindings?.length ?? 0) > 0) {
+        throw new Error(
+          `Bootstrap self.ttl contains blank-node subjects, which the subject-ownership ` +
+          `reseed contract cannot track across loads. Nothing was changed. ` +
+          `Give every subject a named IRI in ${ttlPath} and re-run.`,
+        );
+      }
+
       const totalBefore = await countTotal();
-      const bootstrapBefore = await countBootstrap();
-      const preservedBefore = totalBefore - bootstrapBefore;
+      const preservedSetBefore = await selectPreserved();
+      const preservedBefore = preservedSetBefore.size;
+      const bootstrapBefore = totalBefore - preservedBefore;
 
       // One atomic operation. The two UNION branches feed the INSERT
       // (?is/?ip/?io) and DELETE (?s/?p/?o) templates respectively; the template
@@ -1764,14 +1996,24 @@ export class KnowledgeEngine {
         }`);
 
       const totalAfter = await countTotal();
-      const bootstrapAfter = await countBootstrap();
-      const preservedAfter = totalAfter - bootstrapAfter;
+      const preservedSetAfter = await selectPreserved();
+      const preservedAfter = preservedSetAfter.size;
+      const bootstrapAfter = totalAfter - preservedAfter;
 
-      // Tripwire: nothing outside the bootstrap subject(s) moved.
-      if (preservedAfter !== preservedBefore) {
-        throw new Error(
-          `reseedSelf invariant violated: non-bootstrap triples changed ` +
-          `${preservedBefore} → ${preservedAfter} (concurrent write?); re-run to reconcile`,
+      // Tripwire (set identity, checked AFTER the committed update): nothing
+      // outside the bootstrap subject(s) moved. A tripped wire means the
+      // reseed WAS applied but a concurrent write raced it — see
+      // ReseedInvariantError for the caller contract.
+      const preservedChanged =
+        preservedAfter !== preservedBefore ||
+        [...preservedSetBefore].some(t => !preservedSetAfter.has(t));
+      if (preservedChanged) {
+        throw new ReseedInvariantError(
+          `Persona re-seed WAS applied (bootstrap triples ${bootstrapBefore} → ${bootstrapAfter}), ` +
+          `but the post-apply invariant check found that preserved (non-bootstrap) triples ` +
+          `changed (${preservedBefore} → ${preservedAfter}) — most likely a concurrent write ` +
+          `to the self graph during the reseed, not a reseed failure. ` +
+          `Re-run the reseed to verify a stable result.`,
         );
       }
 

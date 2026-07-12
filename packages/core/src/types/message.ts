@@ -42,7 +42,11 @@ export type ChatType =
   | "topic"
   | "web"
   | "cron"
-  | "webhook";
+  | "webhook"
+  // Self-initiated (unattended) cognitive cycle triggered by a goal wake.
+  // There is no human on the other side; the envelope is synthetic. See
+  // docs/initiative-architecture.md §5–§6.
+  | "initiative";
 
 export interface SenderIdentity {
   id: string;
@@ -72,6 +76,12 @@ export interface RoutingHints {
   sessionId?: string;
   skillName?: string;
   forceNewSession?: boolean;
+  /**
+   * IRI of the goal that triggered an initiative cycle. Set only on synthetic
+   * `chatType:'initiative'` envelopes so the CycleManager can render that exact
+   * goal as the active context (docs/initiative-architecture.md §6).
+   */
+  initiativeGoalId?: string;
 }
 
 export interface ChannelCapabilities {

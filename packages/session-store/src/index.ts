@@ -120,6 +120,61 @@ export class SessionStore {
     return newSession;
   }
 
+  /**
+   * The active session for an explicit `sessionKey` (not derived from a scope),
+   * or null. Used for goal-scoped initiative continuity, where the key is a
+   * per-goal identifier rather than a channel/peer key.
+   */
+  async getActiveSessionByKey(agentId: string, sessionKey: string): Promise<SessionRecord | null> {
+    const stmt = this.db.prepare(
+      'SELECT * FROM sessions WHERE agentId = ? AND sessionKey = ? AND status = ? LIMIT 1',
+    );
+    const row = stmt.get(agentId, sessionKey, 'active') as SessionRow | undefined;
+    return row ? this.mapToRecord(row) : null;
+  }
+
+  /**
+   * Get or create the active session for an explicit `sessionKey`. Unlike
+   * {@link getOrCreateSession} the key is passed directly (not computed from a
+   * scope), which lets callers isolate a session by an arbitrary identifier —
+   * e.g. a goal, for goal-scoped initiative continuity. When the current active
+   * session for the key is archived, the next call mints a fresh one under the
+   * same key (natural rotation).
+   */
+  async getOrCreateSessionByKey(
+    agentId: string,
+    sessionKey: string,
+    origin: SessionOrigin,
+    scope: SessionPolicy['scope'] = 'main',
+  ): Promise<SessionRecord> {
+    const existing = await this.getActiveSessionByKey(agentId, sessionKey);
+    if (existing) return existing;
+
+    const sessionId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const transcriptPath = path.join(this.transcriptsDir, `${sessionId}.jsonl`);
+    const newSession: SessionRecord = {
+      sessionId,
+      agentId,
+      scope,
+      sessionKey,
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+      totalTokens: 0,
+      status: 'active',
+      origin,
+      transcriptPath,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO sessions (sessionId, agentId, scope, sessionKey, createdAt, updatedAt, messageCount, totalTokens, status, origin, transcriptPath)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sessionId, agentId, scope, sessionKey, now, now, 0, 0, 'active', JSON.stringify(origin), transcriptPath);
+    return newSession;
+  }
+
   async getSession(sessionId: string): Promise<SessionRecord | null> {
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE sessionId = ?');
     const row = stmt.get(sessionId) as SessionRow | undefined;

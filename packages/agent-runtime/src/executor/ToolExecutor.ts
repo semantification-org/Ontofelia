@@ -1,6 +1,7 @@
 import { ToolCall, ToolContext, ToolResult, ToolAuditEntry } from '@ontofelia/core';
 import { ToolRegistry, AuditLog } from '@ontofelia/tools';
 import { ToolPolicyEngine } from '@ontofelia/security';
+import { INITIATIVE_ALLOWED_TOOLS } from '../initiativeTools.js';
 
 export class ToolExecutor {
   constructor(
@@ -67,6 +68,66 @@ export class ToolExecutor {
           success: false,
           error: errorStr,
           permissions: []
+        }
+      };
+      await this.auditLog.log(this.enrichAuditEntry(result.auditEntry, context, 'DENY'));
+      return result;
+    }
+
+    // Initiative execution gate (docs/initiative-architecture.md §5–§6, §8 —
+    // THE security boundary, not advertisement filtering). In an unattended
+    // cycle (ctx.unattended) any tool NOT in the shared INITIATIVE_ALLOWED_TOOLS
+    // allowlist is hard-denied HERE, at the single dispatch chokepoint, so an
+    // LLM that NAMES an unadvertised tool (e.g. memory_store — not host-only,
+    // not default-deny) cannot run it with nobody watching. This deny is NOT
+    // approvable/overridable: there is no owner present to approve, and the
+    // approval-queue substrate that would change that is a later task (§8).
+    if (context.unattended === true && !INITIATIVE_ALLOWED_TOOLS.has(tool.name)) {
+      const rule = 'initiative-restricted-tool';
+      const errorStr =
+        `Tool '${tool.name}' is not permitted in an unattended initiative cycle ` +
+        `(blocked by rule '${rule}'). Initiative cycles may only use notify_owner ` +
+        `and read-only tools; destructive/host tools require an attended session.`;
+      const result: ToolResult = {
+        success: false,
+        error: errorStr,
+        output: { error: errorStr, blockedBy: rule },
+        auditEntry: {
+          toolName: tool.name,
+          timestamp: new Date().toISOString(),
+          duration: Date.now() - start,
+          input,
+          output: { error: errorStr, blockedBy: rule },
+          success: false,
+          error: errorStr,
+          permissions: tool.permissions,
+        },
+      };
+      await this.auditLog.log(this.enrichAuditEntry(result.auditEntry, context, 'DENY'));
+      return result;
+    }
+
+    // Self-protection hard block (argument-aware). Runs AFTER Guardian
+    // approval by design: a Guardian approve-all can never override it. This is
+    // the single chokepoint every tool dispatch passes through, so all tools —
+    // including future ones — inherit the guard without per-tool wiring.
+    const invocationCheck = this.policy.checkInvocation(tool, input, context);
+    if (!invocationCheck.allowed) {
+      const errorStr = invocationCheck.reason
+        || `Tool invocation denied by self-protection rule '${invocationCheck.rule}'.`;
+      const result: ToolResult = {
+        success: false,
+        error: errorStr,
+        output: { error: errorStr, blockedBy: invocationCheck.rule },
+        auditEntry: {
+          toolName: tool.name,
+          timestamp: new Date().toISOString(),
+          duration: Date.now() - start,
+          input,
+          output: { error: errorStr, blockedBy: invocationCheck.rule },
+          success: false,
+          error: errorStr,
+          permissions: tool.permissions
         }
       };
       await this.auditLog.log(this.enrichAuditEntry(result.auditEntry, context, 'DENY'));

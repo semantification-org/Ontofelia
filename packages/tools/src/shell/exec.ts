@@ -31,12 +31,19 @@ export class ExecTool implements ToolDefinition {
   private static readonly FORBIDDEN_PATTERNS: RegExp[] = [
     /\bgateway\s+(re)?start\b/i,                       // "... gateway restart" / "gateway start"
     /\bgateway\s+stop\b/i,                             // "... gateway stop"
-    /run-gateway\.sh/i,                                // the launch wrapper
+    /\brun-gateway(\.sh)?\b/i,                         // the launch wrapper (with or without extension)
     /ontofelia-docker\/run\.sh/i,                      // the container (re)create script
     /\bdocker\s+(restart|stop|kill|rm|down)\b[\s\S]{0,40}ontofelia/i,
+    /\bdocker(?:-|\s+)compose\s+(down|stop|kill|rm)\b/i,     // compose teardown (with or without the target)
+    /\bfuser\s+-k\b/i,                                       // fuser -k <port>/tcp kills the gateway's listener
     /\b(pkill|killall)\b[\s\S]{0,30}\bnode\b/i,        // kill the node runtime
+    /\b(pkill|killall)\b[\s\S]{0,40}\b(ontofelia|gateway)\b/i, // kill the gateway by name
     /\bkill\b\s+(-?\w+\s+)?1\b/i,                      // kill PID 1 (the gateway in-container)
-    /\bsystemctl\b[\s\S]{0,40}\b(stop|restart)\b[\s\S]{0,40}ontofelia/i,
+    /\bkill\b[\s\S]{0,80}\b(pgrep|pidof)\b[\s\S]{0,40}\b(node|ontofelia|gateway)\b/i, // kill $(pgrep ...)
+    // systemctl/service operations on the gateway unit, in either word order.
+    /\bsystemctl\b[\s\S]{0,40}\b(stop|restart|kill|disable|mask)\b[\s\S]{0,40}ontofelia/i,
+    /\bsystemctl\b[\s\S]{0,40}ontofelia[\s\S]{0,40}\b(stop|restart|kill|disable|mask)\b/i,
+    /\bservice\b[\s\S]{0,40}ontofelia[\s\S]{0,40}\b(stop|restart|reload|kill)\b/i,
   ];
 
   /** Returns the matched pattern source if the command is self-destructive, else null. */

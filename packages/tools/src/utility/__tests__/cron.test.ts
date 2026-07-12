@@ -79,4 +79,31 @@ describe('CronManageTool', () => {
     const crontabRemoveCall = execFileCalls.find(c => c[0] === 'crontab' && Array.isArray(c[1]) && c[1][0] === '-r');
     expect(crontabRemoveCall).toBeDefined();
   });
+
+  describe('reserved initiative- label prefix (self-schedule protection)', () => {
+    it('refuses to create a job with the reserved prefix', async () => {
+      const res = await tool.execute(
+        { action: 'add', schedule: '0 9 * * *', label: 'initiative-goal-wake', wakeMessage: 'wake' },
+        context,
+      );
+      expect(res.output).toMatch(/reserved prefix "initiative-"/);
+      // Nothing may reach the crontab.
+      expect(vi.mocked(cp.execFile).mock.calls.length).toBe(0);
+    });
+
+    it('refuses to remove a job with the reserved prefix', async () => {
+      const res = await tool.execute({ action: 'remove', removeLabel: 'initiative-nightly' }, context);
+      expect(res.output).toMatch(/reserved prefix "initiative-"/);
+      expect(vi.mocked(cp.execFile).mock.calls.length).toBe(0);
+    });
+
+    it('still allows ordinary labels (prefix must match exactly)', async () => {
+      const res = await tool.execute(
+        { action: 'add', schedule: '0 9 * * *', label: 'initiativeless-job', wakeMessage: 'hi' },
+        context,
+      );
+      // 'initiativeless-job' does not carry the "initiative-" prefix.
+      expect(res.output).toMatch(/Cron job created/);
+    });
+  });
 });

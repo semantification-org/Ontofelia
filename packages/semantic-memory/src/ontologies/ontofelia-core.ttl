@@ -185,6 +185,43 @@ onto:conflictsFound rdf:type owl:DatatypeProperty ;
     rdfs:domain onto:ReflectionEvent ;
     rdfs:range xsd:integer .
 
+# === Behavior Directives (self-model behavior layer) ===
+# Persona behavior rules attached to the agent in the self graph
+# (bootstrap/self.ttl). Binding directives are rendered as numbered
+# imperatives at the very end of the system prompt ("## Binding behavior");
+# descriptive directives render as identity bullets.
+onto:BehaviorDirective rdf:type owl:Class ;
+    rdfs:label "Behavior Directive" ;
+    rdfs:comment "A behavior rule of the agent persona. bindingness=binding rules are prompt imperatives; bindingness=descriptive rules are character traits." .
+
+onto:directiveText rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:BehaviorDirective ; rdfs:range xsd:string ;
+    rdfs:label "directive text" ;
+    rdfs:comment "The imperative rule, English." .
+
+onto:bindingness rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:BehaviorDirective ; rdfs:range xsd:string ;
+    rdfs:label "bindingness" ;
+    rdfs:comment "binding | descriptive" .
+
+onto:directivePriority rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:BehaviorDirective ; rdfs:range xsd:decimal ;
+    rdfs:label "directive priority" ;
+    rdfs:comment "Ordering weight; higher renders first. Safety-scope directives always render before priority ordering applies." .
+
+onto:directiveScope rdf:type owl:DatatypeProperty ;
+    rdfs:domain onto:BehaviorDirective ; rdfs:range xsd:string ;
+    rdfs:label "directive scope" ;
+    rdfs:comment "e.g. autonomy, brevity, language, safety, memory, tone" .
+
+onto:hasDirective rdf:type owl:ObjectProperty ;
+    rdfs:range onto:BehaviorDirective ;
+    rdfs:label "has directive" .
+
+onto:hasDrive rdf:type owl:ObjectProperty ;
+    rdfs:label "has drive" ;
+    rdfs:comment "Links the agent to an intrinsic-motivation drive (cogt:Drive)." .
+
 # ============================================================================
 # Cognitive Architecture vocabulary (cogt:)
 # docs/cognitive-architecture/02-named-graph-topology.md
@@ -513,3 +550,26 @@ cogt:flaggedImpasse rdf:type owl:ObjectProperty ;
     rdfs:domain cogt:ReflectiveMarker ; rdfs:range cogt:Impasse ; rdfs:label "flagged impasse" .
 cogt:resolvedImpasse rdf:type owl:ObjectProperty ;
     rdfs:domain cogt:ReflectiveMarker ; rdfs:range cogt:Impasse ; rdfs:label "resolved impasse" .
+
+# === Intrinsic motivation (inner drive) ===
+# A small, stable, owner-curated set of foundational principles the agent
+# draws purpose and persistence from. Drives live in the self graph alongside
+# identity, seeded from bootstrap/self.ttl (subject-scoped re-seed applies);
+# the agent may reflect on its drives but never rewrites them.
+cogt:Drive rdf:type owl:Class ;
+    rdfs:label "Drive" ;
+    rdfs:comment "An intrinsic-motivation principle of the agent: the represented 'why' behind goals and initiative." .
+
+cogt:driveLabel rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Drive ; rdfs:range xsd:string ;
+    rdfs:label "drive label" .
+
+cogt:driveStatement rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Drive ; rdfs:range xsd:string ;
+    rdfs:label "drive statement" ;
+    rdfs:comment "One first-person sentence expressing the principle." .
+
+cogt:driveRank rdf:type owl:DatatypeProperty ;
+    rdfs:domain cogt:Drive ; rdfs:range xsd:decimal ;
+    rdfs:label "drive rank" ;
+    rdfs:comment "Relative weight for prioritization; higher renders first." .
