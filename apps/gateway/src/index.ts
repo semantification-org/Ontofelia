@@ -5,7 +5,11 @@ import fastifyStatic from '@fastify/static';
 import { OntofeliaConfig } from '@ontofelia/config';
 import { createLogger, AgentConfig, ChannelType, ChannelBinding, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { SessionStore } from '@ontofelia/session-store';
-import { AgentRuntime } from '@ontofelia/agent-runtime';
+import { AgentRuntime, InitiativeService, LoggingNotificationSink, NotificationService, INITIATIVE_JOB_PREFIX } from '@ontofelia/agent-runtime';
+import type { InitiativeSessionPort, NotificationChannelPort, NotificationSink } from '@ontofelia/agent-runtime';
+import { NotifyOwnerTool } from '@ontofelia/tools';
+import type { SessionOrigin } from '@ontofelia/core';
+import { resolveOwnerTarget } from './services/notificationTarget.js';
 import { MockProvider } from '@ontofelia/testkit';
 import { ProviderFactory } from '@ontofelia/providers';
 import { safeCompareSecret } from '@ontofelia/security';
@@ -170,13 +174,135 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   const { channelRegistry, pairingStore, allowlistStore } =
     await initChannels(config, agents);
 
+  // --- Owner notification (docs/initiative-architecture.md §7) ---
+  // The governed notification layer. It is the real NotificationSink for
+  // initiative cycles AND backs the notify_owner tool. Constructed here (after
+  // channels) because it needs the channel registry + allowlist to resolve and
+  // reach the owner's Telegram chat. Delivery target resolution order:
+  //   config.notifications.target ?? channels.telegram.ownerChatId
+  //     ?? first telegram allowlist entry (senderId === chatId for DMs).
+  // There is NO single-owner record — only the allowlist — so the last fallback
+  // simply picks the first paired telegram chat.
+  // Warn at most once when a proactive send finds no trustworthy owner target
+  // (M4); resolveTarget runs on every delivery, so guard the log.
+  let warnedNoOwnerTarget = false;
+  const notificationService = new NotificationService({
+    triplestore,
+    registry: knowledgeEngine.registry,
+    agentId: PRIMARY_AGENT_ID,
+    policy: {
+      maxPerDay: config.notifications.maxPerDay,
+      quietHours: config.notifications.quietHours,
+      minPriorityDuringQuietHours: config.notifications.minPriorityDuringQuietHours,
+      timezone: config.notifications.timezone,
+    },
+    // Lazy: the telegram adapter may connect after this point; resolve at send.
+    channel: () => channelRegistry.get('telegram') as NotificationChannelPort | undefined,
+    // Owner-target resolution order: notifications.target ?? telegram.ownerChatId
+    // ?? the SOLE telegram allowlist entry. We deliberately do NOT fall back to
+    // allowlist[0] when several users are allowlisted (M4) — that could
+    // misdeliver private owner updates. When no target can be trusted, suppress
+    // (reason 'no-target') and warn once that an explicit target is required.
+    resolveTarget: async () => {
+      const res = resolveOwnerTarget({
+        configuredTarget: config.notifications.target,
+        ownerChatId: config.channels.telegram?.ownerChatId,
+        allowlistSenderIds: (await allowlistStore.list('telegram')).map((e) => e.senderId),
+      });
+      if (!res.target && !warnedNoOwnerTarget) {
+        warnedNoOwnerTarget = true;
+        logger.warn(
+          res.reason === 'ambiguous-allowlist'
+            ? 'Proactive notifications need an explicit owner target: multiple telegram users are ' +
+                'allowlisted and none is designated as owner. Set notifications.target or ' +
+                'channels.telegram.ownerChatId — no notification will be delivered until then.'
+            : 'Proactive notifications need an explicit owner target: no telegram owner is configured. ' +
+                'Set notifications.target or channels.telegram.ownerChatId.',
+        );
+      }
+      return res.target;
+    },
+  });
+  // The notify_owner tool shares the same service (registered here rather than in
+  // initToolRegistry because the service depends on the channel registry, which
+  // is composed after the tool registry). getAllowedTools reads the registry
+  // live, so a late registration is picked up on the next message.
+  toolRegistry.register(new NotifyOwnerTool(notificationService));
+  // Surface the "while you were away" digest on the next owner conversation.
+  defaultAgent.setDigestSource(notificationService);
+  // Use the real sink for initiative cycles only when a telegram channel exists;
+  // otherwise fall back to the no-op logging sink (design §7).
+  const notificationSink: NotificationSink = config.channels.telegram?.enabled
+    ? notificationService
+    : new LoggingNotificationSink();
+
   // --- Scheduler ---
   const { JobScheduler, WebhookRegistry } = await import('@ontofelia/scheduler');
   const schedulerPath = path.join(os.homedir(), '.ontofelia', 'scheduler');
   const scheduler = new JobScheduler(schedulerPath);
   await scheduler.load();
 
+  // --- Initiative runtime (docs/initiative-architecture.md §5–§7) ---
+  // Governed autonomy: goal wakes are scheduled as `initiative-<goalUri>`
+  // one-time jobs and handled here. Gated by the flagInitiative kill switch
+  // (default OFF), enforced inside InitiativeService before any dispatch.
+  const initiativeOrigin: SessionOrigin = {
+    channel: 'system',
+    chatType: 'initiative',
+    senderId: 'initiative',
+    accountId: 'initiative',
+  };
+  const initiativeSessionPort: InitiativeSessionPort = {
+    async resolveGoalSession(goalKey: string, cap: number): Promise<string> {
+      const key = `initiative:${goalKey}`;
+      let rec = await sessionStore.getOrCreateSessionByKey(PRIMARY_AGENT_ID, key, initiativeOrigin);
+      if (rec.messageCount >= cap) {
+        await sessionStore
+          .appendTranscript(rec.sessionId, {
+            timestamp: new Date().toISOString(),
+            role: 'system',
+            content: `[initiative] goal session archived at transcript cap (${cap} entries)`,
+            channel: 'system',
+            senderId: 'initiative',
+          })
+          .catch(() => undefined);
+        await sessionStore.updateSession(rec.sessionId, { status: 'archived' });
+        rec = await sessionStore.getOrCreateSessionByKey(PRIMARY_AGENT_ID, key, initiativeOrigin);
+      }
+      return rec.sessionId;
+    },
+    async archiveGoalSession(goalKey: string): Promise<void> {
+      const key = `initiative:${goalKey}`;
+      const rec = await sessionStore.getActiveSessionByKey(PRIMARY_AGENT_ID, key);
+      if (rec) await sessionStore.updateSession(rec.sessionId, { status: 'archived' });
+    },
+  };
+  const initiativeService = new InitiativeService({
+    triplestore,
+    registry: knowledgeEngine.registry,
+    agentId: PRIMARY_AGENT_ID,
+    scheduler,
+    dispatch: async (envelope) => {
+      await defaultAgent.handleMessage(envelope);
+    },
+    notificationSink,
+    session: initiativeSessionPort,
+  });
+
   scheduler.onJob(async (job) => {
+    // Initiative wakes are routed to the InitiativeService, which enforces the
+    // kill switch and runaway guards before running any cycle.
+    if (job.name.startsWith(INITIATIVE_JOB_PREFIX)) {
+      const goalUri = InitiativeService.parseGoalUri(job.name);
+      if (goalUri) {
+        try {
+          await initiativeService.onWake(goalUri);
+        } catch (e) {
+          logger.error(`Initiative wake error for ${goalUri}: ${e}`);
+        }
+      }
+      return;
+    }
     const agent = agents.get(resolveAgentId(job.agentId));
     if (!agent) return;
     const envelope: MessageEnvelope = {
@@ -198,6 +324,13 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     }
   });
   scheduler.start();
+
+  // Downtime recovery (design §5.2): one scan re-registers future goal wakes
+  // and fires overdue ones (guarded). No recurring tick. Best-effort — a failed
+  // recovery must never block gateway startup.
+  initiativeService.recoverOnStart().catch((e) => {
+    logger.error(`Initiative downtime recovery failed: ${(e as Error).message}`);
+  });
 
   // --- Cognitive-architecture background jobs (Phase H) ---
   // Each job drives an idempotent `/cog` maintenance command. They are
@@ -283,7 +416,7 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     conflictDetector, reflectionRunner, toolRegistry, channelRegistry, pairingStore,
     allowlistStore, skillLoader, skillRegistry, skillExecutor,
     pluginLoader, pluginRegistry, scheduler, webhookRegistry, sandboxAdapter,
-    agents, ontologyBasePath
+    agents, ontologyBasePath, initiativeService
   };
 
   const { default: authRoutes } = await import('./routes/auth.js');

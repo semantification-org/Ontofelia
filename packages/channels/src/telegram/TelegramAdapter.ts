@@ -166,6 +166,8 @@ export class TelegramAdapter extends BaseChannelAdapter {
         { command: 'model', description: 'Show the current AI model' },
         { command: 'skills', description: 'Show available skills' },
         { command: 'plugins', description: 'Show installed plugins' },
+        { command: 'goals', description: 'Show current goals' },
+        { command: 'initiative', description: 'Initiative log + kill switch' },
         { command: 'stop', description: 'Stop the running generation' },
       ]);
     } catch { /* non-critical */ }

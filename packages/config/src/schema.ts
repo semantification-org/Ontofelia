@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+/** True when `tz` is a valid IANA zone the Intl API accepts (H1). */
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** "HH:MM" 24h clock time (L3 — a malformed window otherwise silently no-ops). */
+const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 export const configSchema = z.object({
   version: z.number().default(1),
   gateway: z.object({
@@ -109,8 +122,58 @@ export const configSchema = z.object({
   }).default({ trusted: [], allowUntrusted: false }),
   security: z.object({
     requireGuardian: z.boolean().default(true),
-    guardianTimeoutMs: z.number().default(60000)
-  }).default({ requireGuardian: true, guardianTimeoutMs: 60000 }),
+    guardianTimeoutMs: z.number().default(60000),
+    // Directories the agent must never mutate (self-source-write / self-git
+    // protection). Empty = protect the directory the gateway runs from
+    // (process.cwd() at startup).
+    protectedRoots: z.array(z.string()).default([]),
+    // OWNER escape hatch: disables the self-source-write and self-git hard
+    // blocks. Logged as a startup warning when enabled.
+    allowSelfSourceWrites: z.boolean().default(false)
+  }).default({ requireGuardian: true, guardianTimeoutMs: 60000, protectedRoots: [], allowSelfSourceWrites: false }),
+  // Owner-notification policy (docs/initiative-architecture.md §7). All fields
+  // are governed by the NotificationService, not the LLM: the service evaluates
+  // the daily cap and quiet hours BEFORE any send and queues suppressed items as
+  // a pending digest. Defaulted so existing configs that omit the whole section
+  // keep working (notifications.default = {}).
+  notifications: z.object({
+    // Max notifications actually delivered per rolling 24h; further ones are
+    // suppressed (reason 'daily-cap') and queued as digest. 0 = never send.
+    maxPerDay: z.number().int().min(0).default(5),
+    // Owner-local quiet window; notifications below minPriorityDuringQuietHours
+    // are suppressed inside it. Times are "HH:MM" 24h; end<start wraps midnight.
+    quietHours: z.object({ start: z.string(), end: z.string() }).optional(),
+    minPriorityDuringQuietHours: z.enum(['low', 'normal', 'high']).default('high'),
+    // IANA timezone (e.g. 'Europe/Berlin') the quiet-hours window is evaluated
+    // in. Absent = server local time. See the DST caveat in NotificationService.
+    timezone: z.string().optional(),
+    // Overrides channels.telegram.ownerChatId as the delivery target.
+    target: z.string().optional(),
+    // Separate, higher budget reserved for the (future) approval-request path
+    // so approval prompts are not starved by ordinary notifications (§8).
+    approvalMaxPerDay: z.number().int().min(0).default(10),
+  }).superRefine((n, ctx) => {
+    // Fail config load early with a clear message rather than throwing deep in
+    // the notification path (H1) or silently disabling quiet hours (L3).
+    if (n.timezone !== undefined && !isValidTimeZone(n.timezone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['timezone'],
+        message: `notifications.timezone "${n.timezone}" is not a valid IANA timezone (e.g. "Europe/Berlin").`,
+      });
+    }
+    if (n.quietHours) {
+      for (const field of ['start', 'end'] as const) {
+        if (!HHMM.test(n.quietHours[field])) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['quietHours', field],
+            message: `notifications.quietHours.${field} "${n.quietHours[field]}" must be "HH:MM" 24-hour time.`,
+          });
+        }
+      }
+    }
+  }).default({ maxPerDay: 5, minPriorityDuringQuietHours: 'high', approvalMaxPerDay: 10 }),
   memory: z.object({
     backend: z.enum(['fuseki', 'oxigraph', 'memory']).default('oxigraph'),
     triplestore: z.object({

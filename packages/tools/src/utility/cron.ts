@@ -56,8 +56,19 @@ export class CronManageTool implements ToolDefinition {
 
   private gatewayPort: number;
 
+  // Labels with this prefix are reserved for the runtime's own scheduling
+  // (initiative wakes). The agent must not create, modify, or delete them via
+  // this tool — that would let it widen its own autonomy budget. Also enforced
+  // centrally in the ToolPolicyEngine; this is defense-in-depth.
+  static readonly RESERVED_LABEL_PREFIX = 'initiative-';
+
   constructor(gatewayPort = 18780) {
     this.gatewayPort = gatewayPort;
+  }
+
+  private static reservedLabelMessage(label: string): string {
+    return `❌ Refused: the label "${label}" uses the reserved prefix "${CronManageTool.RESERVED_LABEL_PREFIX}". ` +
+      `Jobs with this prefix belong to the runtime's own scheduling and cannot be created, modified, or removed via cron_manage.`;
   }
 
   async execute(input: unknown, _context: ToolContext): Promise<ToolResult> {
@@ -96,7 +107,12 @@ export class CronManageTool implements ToolDefinition {
             output = '❌ Invalid label. Only alphanumeric characters, _ and - are allowed (max 64 characters).';
             break;
           }
-          
+
+          if (data.label.startsWith(CronManageTool.RESERVED_LABEL_PREFIX)) {
+            output = CronManageTool.reservedLabelMessage(data.label);
+            break;
+          }
+
           // Validate cron schedule: must be 5 fields with valid ranges
           const scheduleFields = data.schedule.split(/\s+/);
           if (scheduleFields.length !== 5) {
@@ -171,7 +187,12 @@ export class CronManageTool implements ToolDefinition {
              output = '❌ Invalid label format.';
              break;
           }
-          
+
+          if (data.removeLabel.startsWith(CronManageTool.RESERVED_LABEL_PREFIX)) {
+            output = CronManageTool.reservedLabelMessage(data.removeLabel);
+            break;
+          }
+
           try {
             const cronDir = path.join(os.homedir(), '.ontofelia', 'cron');
             const payloadPath = path.join(cronDir, `job_${data.removeLabel}.json`);

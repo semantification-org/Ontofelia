@@ -1,7 +1,7 @@
 import type { OntofeliaConfig } from '@ontofelia/config';
 import type { ProviderAdapter, TriplestoreAdapter } from '@ontofelia/core';
 import type { SessionStore } from '@ontofelia/session-store';
-import type { AgentRuntime } from '@ontofelia/agent-runtime';
+import type { AgentRuntime, InitiativeService } from '@ontofelia/agent-runtime';
 import type { ToolRegistry } from '@ontofelia/tools';
 import type { ChannelRegistry, PairingStore, AllowlistStore } from '@ontofelia/channels';
 import type { SkillLoader, SkillRegistry, SkillExecutor } from '@ontofelia/skills';
@@ -40,4 +40,5 @@ export interface GatewayContext {
   mimeDetector: MimeDetector;
   nodeRegistry: NodeRegistry;
   ontologyBasePath: string;
+  initiativeService: InitiativeService;
 }

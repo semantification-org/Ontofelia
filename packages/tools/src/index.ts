@@ -7,6 +7,7 @@ export * from './utility/self_inspect.js';
 export * from './utility/web_fetch.js';
 export * from './utility/cron.js';
 export * from './utility/PdfReadTool.js';
+export * from './channel/notify_owner.js';
 export * from './shell/exec.js';
 export * from './filesystem/fs_read.js';
 export * from './filesystem/fs_write.js';

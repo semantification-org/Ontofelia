@@ -44,6 +44,28 @@ describe('ExecTool', () => {
       'killall node',
       'kill -9 1',
       'systemctl restart ontofelia',
+      // Extended lifecycle guard: unit operations in either word order,
+      // service(8), kills matching the gateway process, and the run script
+      // with or without extension — in ANY directory.
+      'systemctl stop ontofelia-gateway.service',
+      'sudo systemctl kill ontofelia',
+      'systemctl --user ontofelia-gateway disable',
+      'systemctl disable ontofelia-gateway',
+      'service ontofelia-gateway stop',
+      'sudo service ontofelia restart',
+      'pkill -f ontofelia',
+      'killall ontofelia-gateway',
+      'pkill -f "node.*gateway"',
+      'kill -9 $(pgrep -f ontofelia)',
+      'kill $(pidof node)',
+      'cd /tmp && bash /opt/ontofelia/run-gateway',
+      // Gateway kill-guard gaps found in review: compose teardown (space and
+      // hyphen forms, with or without an explicit service target) and fuser -k
+      // on the gateway's listener port.
+      'docker compose down',
+      'docker compose stop ontofelia',
+      'docker-compose down',
+      'fuser -k 18780/tcp',
     ];
     for (const cmd of forbidden) {
       it(`refuses self-destructive command: ${cmd}`, async () => {
@@ -68,6 +90,12 @@ describe('ExecTool', () => {
       'node build.js',
       'git status',
       'pnpm --filter @ontofelia/eval test',
+      'systemctl status ontofelia',            // status query, not a lifecycle verb
+      'systemctl restart nginx',               // other units stay manageable
+      'ps aux | grep gateway',                 // observing the process is fine
+      'docker ps',                             // listing containers is fine
+      'docker compose ps',                     // compose status, not a teardown verb
+      'fuser 18780/tcp',                       // querying the port (no -k) is fine
     ];
     for (const cmd of allowed) {
       it(`allows benign command: ${cmd}`, async () => {

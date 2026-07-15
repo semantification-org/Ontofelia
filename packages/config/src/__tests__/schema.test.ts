@@ -49,4 +49,29 @@ describe('Config Schema', () => {
       configSchema.parse({ session: { scope: 'invalid' } });
     }).toThrow(/Invalid option/);
   });
+
+  // H1/L3 — notification policy validation at config load.
+  it('accepts a valid IANA notifications.timezone', () => {
+    const parsed = configSchema.parse({ notifications: { timezone: 'Europe/Berlin' } });
+    expect(parsed.notifications.timezone).toBe('Europe/Berlin');
+  });
+
+  it('rejects an invalid notifications.timezone with a clear message (H1)', () => {
+    expect(() => {
+      configSchema.parse({ notifications: { timezone: 'Totally/Bogus' } });
+    }).toThrow(/valid IANA timezone/);
+  });
+
+  it('accepts well-formed quietHours', () => {
+    const parsed = configSchema.parse({
+      notifications: { quietHours: { start: '22:00', end: '08:00' } },
+    });
+    expect(parsed.notifications.quietHours?.start).toBe('22:00');
+  });
+
+  it('rejects malformed quietHours (L3)', () => {
+    expect(() => {
+      configSchema.parse({ notifications: { quietHours: { start: '25:00', end: '08:00' } } });
+    }).toThrow(/HH:MM/);
+  });
 });

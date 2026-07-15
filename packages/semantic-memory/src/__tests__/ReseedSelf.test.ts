@@ -4,7 +4,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
-import { KnowledgeEngine } from '../KnowledgeEngine.js';
+import { KnowledgeEngine, ReseedInvariantError } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { SelfModel } from '../cognitive/SelfModel.js';
 
@@ -180,6 +180,35 @@ onto:Ontofelia rdfs:label "Ontofelia the owl" .
     const again = await ke.reseedSelf(bootstrapDir, AGENT);
     expect(again.bootstrapAfter).toBe(report.bootstrapAfter);
     expect(again.preserved).toBe(learnedBefore);
+  });
+
+  it('rejects blank-node subjects before touching the self graph', async () => {
+    // Subject ownership cannot be tracked for blank nodes (every parse mints
+    // fresh ones), so a blank-node subject must fail BEFORE any mutation.
+    const ttlWithBlankNode = `@prefix onto: <urn:ontofelia:core#> .
+[] onto:name "anonymous persona fragment" .
+`;
+    await fs.writeFile(path.join(bootstrapDir, 'self.ttl'), ttlWithBlankNode, 'utf-8');
+
+    const totalBefore = await count(store);
+    await expect(ke.reseedSelf(bootstrapDir, AGENT)).rejects.toThrow(/blank-node subjects/);
+
+    // Nothing changed: v1 persona intact, triple count identical.
+    expect(await count(store)).toBe(totalBefore);
+    expect(await ask(store, `<${CORE}Ontofelia> <${CORE}version> "0.2.0"`)).toBe(true);
+    expect(await ask(store, `?s <${CORE}name> "anonymous persona fragment"`)).toBe(false);
+  });
+
+  it('ReseedInvariantError states that the reseed WAS applied (tripwire contract)', () => {
+    // The tripwire fires AFTER the atomic update commits; the error type and
+    // message must not read as "reseed failed" on any surface that relays it.
+    const err = new ReseedInvariantError(
+      'Persona re-seed WAS applied (bootstrap triples 7 → 8), but the post-apply invariant ' +
+      'check found that preserved (non-bootstrap) triples changed (12 → 13).',
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('ReseedInvariantError');
+    expect(err.message).toContain('WAS applied');
   });
 
   it('seeds an empty self graph like a first-time seed', async () => {
