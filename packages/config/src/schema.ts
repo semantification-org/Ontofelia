@@ -263,6 +263,7 @@ export const configSchema = z.object({
     baseUrl: z.string().optional(),
     defaultModel: z.string().default('mock'),
     aliases: z.record(z.string(), z.string()).default({}),
+    models: z.array(z.string()).optional(),
     maxTokens: z.number().optional(),
     temperature: z.number().optional(),
     timeout: z.number().optional(),

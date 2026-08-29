@@ -21,6 +21,9 @@ export interface ProviderConfig {
   baseUrl?: string;
   defaultModel: string;
   aliases: Record<string, string>;
+  // Optional explicit list of model ids this instance may use. Lets an operator
+  // correct the model list through configuration instead of a code release.
+  models?: string[];
   maxTokens?: number;
   temperature?: number;
   timeout?: number;

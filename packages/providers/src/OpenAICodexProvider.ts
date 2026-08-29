@@ -2,11 +2,35 @@ import { ProviderAdapter, ProviderConfig, ChatRequest, ChatResponse, StreamEvent
 import { TokenStore } from './auth/TokenStore.js';
 import { OAuthPKCE } from './auth/OAuthPKCE.js';
 
+// Endpoint the Codex backend exposes for the models available to the signed-in
+// account. It is a routed endpoint that accepts GET and answers 401 without
+// credentials, while unknown paths under the same prefix are rejected earlier
+// with a generic HTML 403 — that difference is how it was identified.
+const CODEX_MODELS_URL = 'https://chatgpt.com/backend-api/codex/models';
+
+// The discovered list is cached in memory so sending a chat message never
+// triggers a listing request. A failed attempt is cached far more briefly so an
+// expired token or a short outage recovers on its own.
+const MODEL_CACHE_TTL_MS = 60 * 60 * 1000;
+const MODEL_CACHE_ERROR_TTL_MS = 5 * 60 * 1000;
+
+const DEFAULT_CONTEXT_WINDOW = 128000;
+
+// Last resort, used only when discovery fails and nothing is configured. This is
+// deliberately not the place to maintain the model list: set `provider.models`
+// in the configuration instead, which needs no code release.
+const BUILT_IN_MODELS: ModelInfo[] = [
+  { id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: DEFAULT_CONTEXT_WINDOW },
+  { id: 'gpt-5.4', name: 'GPT-5.4', contextWindow: DEFAULT_CONTEXT_WINDOW },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', contextWindow: DEFAULT_CONTEXT_WINDOW }
+];
+
 export class OpenAICodexProvider implements ProviderAdapter {
   readonly name = 'openai-codex';
   protected config!: ProviderConfig;
   private tokenStore = new TokenStore();
   private oauthPKCE = new OAuthPKCE();
+  private modelCache: { models: ModelInfo[]; expiresAt: number } | null = null;
 
   async initialize(config: ProviderConfig): Promise<void> {
     this.config = config;
@@ -73,12 +97,139 @@ export class OpenAICodexProvider implements ProviderAdapter {
     return { healthy: true, component: this.name, checkedAt: new Date().toISOString() };
   }
 
+  // Report the models this account can use. The list is read from the provider
+  // and cached, so it is no longer maintained in source. Whatever goes wrong,
+  // this returns a usable list and never throws — an empty model dropdown is
+  // worse than a slightly stale one.
   async listModels(): Promise<ModelInfo[]> {
-    return [
-      { id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 128000 },
-      { id: 'gpt-5.4', name: 'GPT-5.4', contextWindow: 128000 },
-      { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', contextWindow: 128000 }
-    ];
+    const now = Date.now();
+    if (this.modelCache && this.modelCache.expiresAt > now) {
+      return this.modelCache.models;
+    }
+
+    let discovered: ModelInfo[] = [];
+    let discoverySucceeded = true;
+    try {
+      discovered = await this.fetchAvailableModels();
+      if (discovered.length === 0) {
+        discoverySucceeded = false;
+        console.warn('[openai-codex] The provider returned no models; using the configured list instead.');
+      }
+    } catch (e) {
+      discoverySucceeded = false;
+      console.warn(
+        `[openai-codex] Could not list models from the provider; using the configured list instead: ${(e as Error).message}`
+      );
+    }
+
+    const models = this.withConfiguredModels(discovered);
+    this.modelCache = {
+      models,
+      expiresAt: now + (discoverySucceeded ? MODEL_CACHE_TTL_MS : MODEL_CACHE_ERROR_TTL_MS)
+    };
+    return models;
+  }
+
+  // Ask the Codex backend which models are available. Throws on any problem;
+  // the caller decides what to fall back to.
+  private async fetchAvailableModels(): Promise<ModelInfo[]> {
+    const stored = await this.loadStoredAuth();
+    const token = this.config?.oauthToken ?? stored?.accessToken;
+    if (!token) throw new Error('no valid OAuth token');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config?.timeout || 10000);
+    try {
+      const res = await fetch(CODEX_MODELS_URL, {
+        method: 'GET',
+        headers: this.buildCodexHeaders(token, stored?.accountId),
+        signal: controller.signal
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return this.parseModelList(await res.json());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  // The response shape of the Codex model endpoint is not documented, so accept
+  // the shapes the OpenAI APIs use in practice: a bare array, `{ data: [...] }`
+  // or `{ models: [...] }`, with entries that are either plain ids or objects.
+  private parseModelList(payload: unknown): ModelInfo[] {
+    const container = (payload ?? {}) as { data?: unknown; models?: unknown };
+    const entries: unknown[] =
+      Array.isArray(payload) ? payload :
+      Array.isArray(container.data) ? container.data :
+      Array.isArray(container.models) ? container.models :
+      [];
+
+    const models: ModelInfo[] = [];
+    for (const entry of entries) {
+      if (typeof entry === 'string' && entry) {
+        models.push(this.describeModel(entry));
+        continue;
+      }
+      if (!entry || typeof entry !== 'object') continue;
+
+      const record = entry as Record<string, unknown>;
+      const id = [record.id, record.slug, record.model].find(v => typeof v === 'string' && v) as string | undefined;
+      if (!id) continue;
+
+      const name = [record.name, record.display_name, record.title].find(v => typeof v === 'string' && v) as string | undefined;
+      const contextWindow = [record.context_window, record.context_length, record.max_context_window]
+        .find(v => typeof v === 'number') as number | undefined;
+
+      models.push({
+        id,
+        name: name ?? this.describeModel(id).name,
+        contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW
+      });
+    }
+    return models;
+  }
+
+  // Combine the discovered models with everything the configuration says this
+  // instance can run. Configured entries are appended, never dropped: the model
+  // the instance is actually running on must always be selectable, which is
+  // exactly what a stale hardcoded list got wrong.
+  private withConfiguredModels(discovered: ModelInfo[]): ModelInfo[] {
+    const result: ModelInfo[] = [];
+    const seen = new Set<string>();
+    const add = (model: ModelInfo): void => {
+      if (!model.id || seen.has(model.id)) return;
+      seen.add(model.id);
+      result.push(model);
+    };
+
+    const base = discovered.length > 0
+      ? discovered
+      : (this.config?.models ?? []).map(id => this.describeModel(id));
+    for (const model of base) add(model);
+
+    // Alias keys are accepted as model names by the runtime and alias values are
+    // the real model ids, so both are selectable and both belong in the list.
+    const aliases = this.config?.aliases ?? {};
+    for (const [alias, target] of Object.entries(aliases)) {
+      add(this.describeModel(target));
+      add(this.describeModel(alias));
+    }
+
+    for (const id of this.config?.fallbackModels ?? []) add(this.describeModel(id));
+
+    const defaultModel = this.config?.defaultModel;
+    if (defaultModel) {
+      add(this.describeModel(aliases[defaultModel] ?? defaultModel));
+      add(this.describeModel(defaultModel));
+    }
+
+    return result.length > 0 ? result : BUILT_IN_MODELS.map(m => ({ ...m }));
+  }
+
+  // Turn a bare model id into a ModelInfo, reusing a friendly name when the id
+  // is one we happen to know.
+  private describeModel(id: string): ModelInfo {
+    const known = BUILT_IN_MODELS.find(m => m.id === id);
+    return known ? { ...known } : { id, name: id, contextWindow: DEFAULT_CONTEXT_WINDOW };
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
