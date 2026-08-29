@@ -1,5 +1,6 @@
 import { AgentConfig, AgentLifecycle, AgentState, ProviderAdapter, MessageEnvelope, ChatMessage, SessionRecord, SessionOrigin, ToolCall, ToolContext, createLogger } from '@ontofelia/core';
-import type { TriplestoreAdapter } from '@ontofelia/core';
+import type { TriplestoreAdapter, ModelInfo } from '@ontofelia/core';
+import { updateConfigField } from '@ontofelia/config';
 import { SessionStore } from '@ontofelia/session-store';
 import { ToolRegistry, AuditLog } from '@ontofelia/tools';
 import { ToolPolicyEngine } from '@ontofelia/security';
@@ -66,6 +67,15 @@ export type {
   DigestItem,
 } from './cognitive/NotificationService.js';
 
+/** A model fallback that actually served an answer (see getLastFallback). */
+export interface FallbackRecord {
+  requestedModel: string;
+  usedModel: string;
+  reason: string;
+  /** ISO-8601 timestamp of the fallback. */
+  at: string;
+}
+
 export interface AgentResponse {
   text: string;
   sessionId: string;
@@ -99,15 +109,11 @@ export interface DebugEvent {
 
 export type DebugLogger = (event: DebugEvent) => void;
 
-/**
- * Fallback models to try (in order) when the primary model returns an empty response.
- * These should be reliable, free models on OpenRouter.
- */
-const DEFAULT_FALLBACK_MODELS = [
-  'deepseek/deepseek-chat-v3-0324:free',
-  'google/gemma-3-27b-it:free',
-  'meta-llama/llama-4-scout:free',
-];
+// No model id is hardcoded in this file: which models exist depends entirely on
+// the configured provider, so a built-in list goes stale and offers models the
+// active provider cannot reach. The fallback chain comes from
+// provider.fallbackModels; when it is empty there is no fallback and the primary
+// failure is reported instead.
 
 const MAX_TOOL_ROUNDS = 100; // autonomy budget (#962); shared by streaming + non-streaming paths
 // Lower tool-round budget for unattended initiative cycles
@@ -254,6 +260,10 @@ export class AgentRuntime {
   // channel registry, which is composed after the AgentRuntime). Optional so
   // the runtime works without it (tests, notifications disabled).
   private digestSource?: { drainDigest(): Promise<import('./cognitive/NotificationService.js').DigestItem[]> };
+  // Last automatic model fallback in this process. Without this, a misconfigured
+  // primary model is invisible from the outside: the agent keeps answering, just
+  // on a different model than the one that was asked for.
+  private lastFallback: FallbackRecord | null = null;
 
   constructor(
     public readonly agentId: string,
@@ -296,7 +306,7 @@ export class AgentRuntime {
     }
     // Initialize Semantic Parser (Ontology Learning pipeline)
     if (provider && knowledgeEngine) {
-      const parserModel = providerConfig?.defaultModel || 'google/gemma-3-27b-it:free';
+      const parserModel = providerConfig?.defaultModel || config.model;
       this.semanticParser = new SemanticParser(provider, {
         model: parserModel,
         temperature: 0.1,
@@ -430,6 +440,24 @@ export class AgentRuntime {
       totalRuns: this.totalRuns,
       lastActivity: this.lastActivity
     };
+  }
+
+  /**
+   * The last automatic model fallback that served an answer in this process, or
+   * null if none occurred. Read by the outside (health/status surfaces) to see
+   * that answers are no longer coming from the requested model.
+   */
+  getLastFallback(): FallbackRecord | null {
+    return this.lastFallback;
+  }
+
+  /**
+   * Record a fallback that actually served an answer and make it visible in the
+   * log — a silent fallback hides a broken primary model.
+   */
+  private recordFallback(requestedModel: string, usedModel: string, reason: string): void {
+    this.lastFallback = { requestedModel, usedModel, reason, at: new Date().toISOString() };
+    this.logger.warn(`Model fallback: requested ${requestedModel}, answered with ${usedModel} (${reason})`);
   }
 
   private resolveModel(model: string): string {
@@ -1699,8 +1727,9 @@ Users can use these commands:
       // Fallback: if response is empty/errored and autoFallback is enabled, retry with fallback model
       if ((primaryError || !response.content || response.content.trim().length === 0) && this.providerConfig?.autoFallback !== false) {
         this.emitDebug('error', primaryError ? `Error with ${currentModel}: ${primaryError} — trying fallback` : `Empty response from ${currentModel} — trying fallback`);
-        
-        const fallbackList = (this.providerConfig?.fallbackModels?.length ? this.providerConfig.fallbackModels : DEFAULT_FALLBACK_MODELS);
+        const fallbackReason = primaryError ? `primary model failed: ${primaryError}` : 'primary model returned an empty response';
+
+        const fallbackList = this.providerConfig?.fallbackModels ?? [];
         const triedModels: string[] = [currentModel];
         for (const fallbackModel of fallbackList) {
           if (fallbackModel === currentModel) continue;
@@ -1714,6 +1743,7 @@ Users can use these commands:
             });
             if (fallbackResponse.content && fallbackResponse.content.trim().length > 0) {
               this.emitDebug('llm_response', `Fallback ${fallbackModel} succeeded`, { contentLength: fallbackResponse.content.length });
+              this.recordFallback(currentModel, fallbackModel, fallbackReason);
               await this.sessionStore.appendTranscript(session.sessionId, {
                 timestamp: new Date().toISOString(),
                 role: 'assistant',
@@ -1737,7 +1767,7 @@ Users can use these commands:
         }
         
         // All fallbacks failed — return error message
-        const modelNames = triedModels.map(m => m.split('/').pop()?.replace(':free', '') || m).join(', ');
+        const modelNames = triedModels.join(', ');
         const errorText = `⚠️ No models responded (${modelNames}). Please try again or switch models in settings.`;
         await this.sessionStore.appendTranscript(session.sessionId, {
           timestamp: new Date().toISOString(),
@@ -1919,9 +1949,10 @@ Users can use these commands:
       // Fallback: if streamed response is empty/errored and autoFallback is enabled
       if ((primaryStreamError || finalContent.trim().length === 0) && this.providerConfig?.autoFallback !== false) {
         this.emitDebug('error', primaryStreamError ? `Error with ${currentModel}: ${primaryStreamError} — trying fallback` : `Empty stream response from ${currentModel} — trying fallback`);
-        
+        const fallbackReason = primaryStreamError ? `primary model failed: ${primaryStreamError}` : 'primary model returned an empty response';
+
         let fallbackSuccess = false;
-        const fallbackList = (this.providerConfig?.fallbackModels?.length ? this.providerConfig.fallbackModels : DEFAULT_FALLBACK_MODELS);
+        const fallbackList = this.providerConfig?.fallbackModels ?? [];
         const triedModels: string[] = [currentModel];
         for (const fallbackModel of fallbackList) {
           if (fallbackModel === currentModel) continue;
@@ -1947,7 +1978,8 @@ Users can use these commands:
             if (fallbackContent.trim().length > 0) {
               finalContent = fallbackContent;
               this.emitDebug('llm_response', `Fallback ${fallbackModel} succeeded`, { contentLength: fallbackContent.length });
-              
+              this.recordFallback(currentModel, fallbackModel, fallbackReason);
+
               // Save fallback response
               await this.sessionStore.appendTranscript(session.sessionId, {
                 timestamp: new Date().toISOString(),
@@ -1968,7 +2000,7 @@ Users can use these commands:
         }
         
         if (!fallbackSuccess) {
-          const modelNames = triedModels.map(m => m.split('/').pop()?.replace(':free', '') || m).join(', ');
+          const modelNames = triedModels.join(', ');
           const errorText = `⚠️ No models responded (${modelNames}). Please try again or switch models in settings.`;
           yield { type: 'text_delta', content: errorText };
           finalContent = errorText;
@@ -2111,7 +2143,18 @@ Users can use these commands:
     if (cmd === '/status') {
       const state = this.getState();
       const currentSession = await this.sessionStore.getSession(session.sessionId);
-      return { text: `Agent Status: ${state.lifecycle}\nSession Messages: ${currentSession?.messageCount || 0}`, sessionId: session.sessionId };
+      const lines = [
+        `Agent Status: ${state.lifecycle}`,
+        `Session Messages: ${currentSession?.messageCount || 0}`,
+        `Model: ${this.resolveModel(this.config.model)}`,
+      ];
+      // Only reported when it actually happened: an automatic fallback means
+      // the answers are no longer coming from the configured model.
+      const fallback = this.getLastFallback();
+      if (fallback) {
+        lines.push(`Last fallback: requested ${fallback.requestedModel}, answered by ${fallback.usedModel} at ${fallback.at}`);
+      }
+      return { text: lines.join('\n'), sessionId: session.sessionId };
     }
     if (cmd === '/tools') {
       const tools = this.getAllowedTools(session, envelope, resolvedWorkspace);
@@ -2182,72 +2225,97 @@ Users can use these commands:
       const providerName = this.providerConfig?.name || 'unknown';
 
       if (modelArg) {
-        // Switch model
+        // Switching the model is a cost, quality and availability decision for
+        // the whole deployment — owner only. The read-only listing below stays
+        // open to every paired user.
+        if (!isOwner) {
+          return {
+            text: 'Switching the model is owner-only. Send /model without an argument to see the available models.',
+            sessionId: session.sessionId,
+          };
+        }
+
+        // Apply in memory. Both fields are needed: resolveModel() only consults
+        // the provider default when this agent's own model is empty or a
+        // placeholder, so setting defaultModel alone leaves the next call on the
+        // old model while reporting success.
         if (this.providerConfig) {
           this.providerConfig.defaultModel = modelArg;
         }
+        this.config.model = modelArg;
 
-        // Persist to config file
+        // Persist through the config writer, which parses JSON5 properly and
+        // validates before writing. Never hand-rewrite the config file.
+        let persistNote = '';
         try {
           const configPath = path.join(os.homedir(), '.ontofelia', 'ontofelia.json5');
-          const raw = await fs.readFile(configPath, 'utf-8');
-          // Strip JSON5 comments for parsing
-          const jsonStr = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/,\s*([}\]])/g, '$1');
-          const json = JSON.parse(jsonStr);
-          if (json.provider) {
-            json.provider.defaultModel = modelArg;
-          } else {
-            json.provider = { defaultModel: modelArg };
-          }
-          await fs.writeFile(configPath, JSON.stringify(json, null, 2));
-        } catch {
-          // Log but don't fail — in-memory change still works
+          await updateConfigField(configPath, 'provider.defaultModel', modelArg);
+        } catch (e: unknown) {
+          const reason = (e as Error).message || 'unknown error';
+          this.logger.warn(`Could not persist model change: ${reason}`);
+          // The user must know the switch is process-local — reporting plain
+          // success here is how the change silently disappeared before.
+          persistNote = `\n⚠️ Not saved to the config file (${reason}). The switch applies to this process only and is lost on restart.`;
         }
 
-        return { 
-          text: `✅ Model switched: ${providerName} → *${modelArg}*`,
+        return {
+          text: `✅ Model switched: ${providerName} → *${modelArg}*${persistNote}`,
           sessionId: session.sessionId,
           model: modelArg,
           provider: providerName,
         };
       }
 
-      // Show model list
-      const freeModels = [
-        'deepseek/deepseek-chat-v3-0324:free',
-        'meta-llama/llama-3.1-70b-instruct:free',
-        'mistralai/mistral-small-3.1-24b-instruct:free',
-        'google/gemma-3-27b-it:free',
-        'nvidia/llama-3.1-nemotron-70b-instruct:free',
-        'qwen/qwen3-235b-a22b:free',
-      ];
-      const paidModels = [
-        'openai/gpt-4o',
-        'openai/gpt-4.1',
-        'anthropic/claude-sonnet-4',
-        'google/gemini-2.5-flash',
-      ];
+      // Show the models the ACTIVE provider offers. A hardcoded list goes stale
+      // and offers models this provider cannot reach — with autoFallback on,
+      // picking one of those fails silently into another model.
+      let models: ModelInfo[] = [];
+      let listError: string | undefined;
+      if (typeof this.provider.listModels === 'function') {
+        try {
+          models = await this.provider.listModels();
+        } catch (e: unknown) {
+          listError = (e as Error).message || 'unknown error';
+        }
+      }
 
-      const allModels = [...freeModels, ...paidModels];
-      const modelList = allModels.map(m => {
-        const isCurrent = m === currentModel;
-        const isFree = m.includes(':free');
-        return `${isCurrent ? '👉 ' : '   '}${isFree ? '🆓' : '💰'} ${m}`;
+      if (models.length === 0) {
+        if (listError) {
+          this.logger.warn(`Could not list models for provider ${providerName}: ${listError}`);
+        }
+        return {
+          text: `🧠 *Current model:* ${currentModel}\n📡 *Provider:* ${providerName}\n\n` +
+            `⚠️ Could not determine the available models for provider ${providerName}` +
+            `${listError ? ` (${listError})` : ''}. Send \`/model <id>\` directly to switch (owner only).`,
+          sessionId: session.sessionId,
+        };
+      }
+
+      const modelList = models.map(m => {
+        const isCurrent = m.id === currentModel;
+        const label = m.name && m.name !== m.id ? `${m.id} — ${m.name}` : m.id;
+        return `${isCurrent ? '👉 ' : '   '}${label}`;
       }).join('\n');
 
-      return { 
-        text: `🧠 *Current model:* ${currentModel}\n📡 *Provider:* ${providerName}\n\n${modelList}\n\nSend \`/model <name>\` to switch.`,
+      return {
+        text: `🧠 *Current model:* ${currentModel}\n📡 *Provider:* ${providerName}\n\n${modelList}\n\nSend \`/model <id>\` to switch (owner only).`,
         sessionId: session.sessionId,
-        inlineButtons: allModels.map(m => ({
-          text: `${m === currentModel ? '✅ ' : ''}${m.split('/').pop()!.replace(':free', ' 🆓')}`,
-          callbackData: `/model ${m}`,
+        inlineButtons: models.map(m => ({
+          text: `${m.id === currentModel ? '✅ ' : ''}${m.name || m.id}`,
+          callbackData: `/model ${m.id}`,
         })),
       };
     }
 
     if (cmd === '/help') {
       const ownerCommands = isOwner ? ', /goals, /initiative, /reseed-persona' : '';
-      return { text: `Available commands: /new, /reset, /status, /tools, /model, /skills, /plugins, /help, /stop${ownerCommands}`, sessionId: session.sessionId };
+      // /model lists for everyone, but only the owner may switch — say so
+      // instead of advertising it as a plain command.
+      return {
+        text: `Available commands: /new, /reset, /status, /tools, /model, /skills, /plugins, /help, /stop${ownerCommands}\n` +
+          '/model lists the available models; switching with /model <id> is owner-only.',
+        sessionId: session.sessionId,
+      };
     }
     if (cmd === '/stop') {
       await this.stop();

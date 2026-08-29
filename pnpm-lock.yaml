@@ -211,6 +211,9 @@ importers:
 
   packages/agent-runtime:
     dependencies:
+      '@ontofelia/config':
+        specifier: workspace:*
+        version: link:../config
       '@ontofelia/core':
         specifier: workspace:*
         version: link:../core

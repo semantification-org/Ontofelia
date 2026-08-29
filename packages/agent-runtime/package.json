@@ -19,6 +19,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@ontofelia/config": "workspace:*",
     "@ontofelia/core": "workspace:*",
     "@ontofelia/plugins": "workspace:^",
     "@ontofelia/security": "workspace:*",
