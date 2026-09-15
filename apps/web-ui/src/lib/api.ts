@@ -120,11 +120,15 @@ export async function renameSession(token: string, sessionId: string, displayNam
   });
 }
 
-export async function changeModel(token: string, model: string): Promise<{ success: boolean; model: string }> {
+export async function changeModel(
+  token: string,
+  model: string,
+  force = false
+): Promise<{ success: boolean; model: string; warning?: string }> {
   return apiFetch('/config/model', token, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model })
+    body: JSON.stringify(force ? { model, force: true } : { model })
   });
 }
 

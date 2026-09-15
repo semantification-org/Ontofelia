@@ -71,13 +71,20 @@ export function SettingsPanel({ onClose, forced = false }: SettingsPanelProps) {
   };
 
   const handleModelChange = async () => {
-    if (!token || !modelInput.trim() || modelInput === currentModel) return;
+    const id = modelInput.trim();
+    if (!token || !id || modelInput === currentModel) return;
     setModelSaving(true);
     setModelMessage(null);
     try {
-      await changeModel(token, modelInput.trim());
-      setCurrentModel(modelInput.trim());
-      setModelMessage({ type: 'success', text: `Model changed to ${modelInput.trim()}` });
+      // The free-text field exists to set a model the provider list does not
+      // offer, so an unlisted id is sent with force instead of being rejected.
+      const listed = models.some(m => m.id === id);
+      const res = await changeModel(token, id, !listed);
+      setCurrentModel(id);
+      setModelMessage({
+        type: 'success',
+        text: res.warning ? `Model changed to ${id} — ${res.warning}` : `Model changed to ${id}`
+      });
     } catch (e) {
       setModelMessage({ type: 'error', text: (e as Error).message });
     } finally {
