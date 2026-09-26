@@ -89,6 +89,8 @@ scored H0–H6 with McNemar/Wilcoxon significance (Holm-corrected). Pilot run `p
 | Auditable provenance (H4) | 0.89 | 0.64 | win (pooled, p=0.014) |
 | Constraint/consistency (H5) | 1.00 | 0.89 | modest |
 
+**How the pilot fed the memory.** In this pilot, Ontofelia (condition A) received each scenario's facts in pre-parsed form and stored them through the real persistence path (`storeFact`); the RAG baseline received the raw turn text. The LLM parser that turns conversation into facts was therefore not in the measured path. The numbers above measure the governed memory given correct extraction, not Ontofelia end to end in conversation. An end-to-end measurement with the parser in the loop has not been run yet.
+
 The two effects that held on **every model tested** were **forgetting (H6)** and **contradiction
 detection (H3)**. This *supports the hypothesis against a RAG baseline* — it is **not** evidence
 about the OpenClaw or Hermes products, which we have not benchmarked. Pilot-scale, preliminary.
