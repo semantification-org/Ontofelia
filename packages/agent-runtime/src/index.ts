@@ -8,7 +8,7 @@ import { ToolExecutor } from './executor/ToolExecutor.js';
 import { SkillRegistry, SkillExecutor } from '@ontofelia/skills';
 import { PluginRegistry } from '@ontofelia/plugins';
 import { EntityMatcher, KnowledgeEngine, SemanticParser, OntologyContextProvider, SemanticIngestionService, GraphCatalog, ProceduralMemory, SelfModel, EpisodicMemory, EpisodicConsolidation, PreferenceConsolidation, ChoiceCapture, GraphUriResolver, sparqlIri } from '@ontofelia/semantic-memory';
-import type { SemanticParseResult, ConsolidationReport, EpisodicConsolidationReport, PreferenceConsolidationReport, SeedCapability, SeedConstraint, RetentionReport } from '@ontofelia/semantic-memory';
+import type { SemanticParseResult, SemanticParserStats, ConsolidationReport, EpisodicConsolidationReport, PreferenceConsolidationReport, SeedCapability, SeedConstraint, RetentionReport } from '@ontofelia/semantic-memory';
 import { GoalStack } from './cognitive/GoalStack.js';
 import { fileKeySource } from './cognitive/ArgDigestKey.js';
 import { seedDerivedSelfModel, collectSelfModelSources } from './cognitive/SelfModelSources.js';
@@ -330,7 +330,7 @@ export class AgentRuntime {
     if (provider && knowledgeEngine) {
       const parserModel = providerConfig?.defaultModel || config.model;
       this.semanticParser = new SemanticParser(provider, {
-        model: parserModel,
+        model: this.resolveModel(parserModel),
         temperature: 0.1,
         maxTokens: 2048,
       });
@@ -570,6 +570,11 @@ export class AgentRuntime {
   private recordFallback(requestedModel: string, usedModel: string, reason: string): void {
     this.lastFallback = { requestedModel, usedModel, reason, at: new Date().toISOString() };
     this.logger.warn(`Model fallback: requested ${requestedModel}, answered with ${usedModel} (${reason})`);
+  }
+
+  /** Parser failure counters (see `SemanticParser.getStats()`), for health checks. */
+  getSemanticParserStats(): SemanticParserStats | undefined {
+    return this.semanticParser?.getStats();
   }
 
   private resolveModel(model: string): string {
@@ -885,6 +890,10 @@ If a greeting or onboarding template is written in another language, translate a
 
           if (parseResult.meta.skipped) {
             this.emitDebug('ner', `Semantic parse skipped: ${parseResult.meta.skipReason}`);
+          } else if (parseResult.meta.skipReason?.startsWith('parser_error:')) {
+            const warning = `Semantic parser failed for model ${parseResult.meta.modelUsed}: ${parseResult.meta.skipReason}`;
+            this.logger.warn({ model: parseResult.meta.modelUsed, skipReason: parseResult.meta.skipReason }, warning);
+            this.emitDebug('error', `Semantic parse error: ${parseResult.meta.modelUsed}`);
           } else {
             this.emitDebug('ner', `Semantic parse: ${parseResult.facts.length} facts, ${parseResult.proposals.length} proposals`, {
               facts: parseResult.facts.length,
