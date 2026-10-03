@@ -2,6 +2,9 @@ import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
 import { MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { safeCompareSecret } from '@ontofelia/security';
+import type { SemanticParserStats } from '@ontofelia/semantic-memory';
+
+const LAST_ERROR_MAX_LENGTH = 300;
 
 export default async function systemRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
   const { agents, config, fusekiManager, triplestore, channelRegistry,
@@ -41,6 +44,30 @@ export default async function systemRoutes(fastify: FastifyInstance, ctx: Gatewa
       // Triplestore may not be available
     }
 
+    // Parser failure counters, per agent that has a SemanticParser. An agent
+    // without one (or one that throws while asked) is simply left out, so a
+    // broken agent never takes down /api/status.
+    const semanticParserAgents: Record<string, SemanticParserStats> = {};
+    let semanticParserFailures = 0;
+    let semanticParserConsecutiveFailures = 0;
+    for (const [agentId, agent] of agents) {
+      let stats: SemanticParserStats | undefined;
+      try {
+        stats = agent.getSemanticParserStats();
+      } catch {
+        continue;
+      }
+      if (!stats) continue;
+
+      const copy: SemanticParserStats = { ...stats };
+      if (copy.lastError && copy.lastError.length > LAST_ERROR_MAX_LENGTH) {
+        copy.lastError = copy.lastError.slice(0, LAST_ERROR_MAX_LENGTH);
+      }
+      semanticParserAgents[agentId] = copy;
+      semanticParserFailures += stats.failures;
+      semanticParserConsecutiveFailures = Math.max(semanticParserConsecutiveFailures, stats.consecutiveFailures);
+    }
+
     return {
       running: true,
       uptime: process.uptime(),
@@ -49,7 +76,12 @@ export default async function systemRoutes(fastify: FastifyInstance, ctx: Gatewa
       port: config.gateway.port,
       agents: { total: agents.size, running: Array.from(agents.values()).filter(a => a.lifecycle === 'running').length },
       channels: { total: channelRegistry.list().length, connected: channelRegistry.getConnected().length },
-      memory: { backend: config.memory.backend, status: triplestore.status, tripleCount }
+      memory: { backend: config.memory.backend, status: triplestore.status, tripleCount },
+      semanticParser: {
+        failures: semanticParserFailures,
+        consecutiveFailures: semanticParserConsecutiveFailures,
+        agents: semanticParserAgents
+      }
     };
   });
 
