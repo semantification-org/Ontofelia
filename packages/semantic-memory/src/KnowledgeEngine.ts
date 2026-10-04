@@ -183,6 +183,49 @@ export interface CatchUpResult {
   error?: string;
 }
 
+/**
+ * Failure counters for one best-effort write/revision path — "best-effort"
+ * meaning a caught error there never blocks the surrounding write, but must
+ * not vanish silently either (see {@link KnowledgeEngineBestEffortStats}).
+ */
+export interface PathStats {
+  failures: number;
+  lastError?: string;
+  lastErrorAt?: string;
+}
+
+/**
+ * Per-path failure counters for the three best-effort catches in
+ * KnowledgeEngine: truth maintenance after supersession, on-write reasoning,
+ * and owner↔named-person entity resolution. Returned by
+ * {@link KnowledgeEngine.getBestEffortStats}.
+ */
+export interface KnowledgeEngineBestEffortStats {
+  truthMaintenance: PathStats;
+  reasoning: PathStats;
+  entityResolution: PathStats;
+}
+
+/**
+ * A truth-maintenance sweep that failed after a claim was superseded. The
+ * base triple is already gone, but any inferences it supported may still be
+ * sitting in the inferred graph — this is the open repair, kept in memory so
+ * it is at least visible via {@link KnowledgeEngine.getPendingTruthMaintenance}.
+ *
+ * No retry mechanism and no persistence in this slice: the list lives in
+ * memory only and is lost on restart, while the stale inferences it points
+ * at stay in the store. The base triple and the claim status are correct
+ * either way. Whether to retry or persist this list is a later decision.
+ */
+export interface PendingTruthMaintenance {
+  claimUri: string;
+  graph: string;
+  subject: string;
+  predicate: string;
+  failedAt: string;
+  error: string;
+}
+
 export class KnowledgeEngine {
   private reasoner?: ReasonableEngine;
   private logger: EngineLogger = {
@@ -195,6 +238,17 @@ export class KnowledgeEngine {
   private claimService: ClaimProvenanceService;
   /** Whitelist of permitted Named Graphs — see GraphRegistry. */
   private readonly graphRegistry: GraphRegistry;
+
+  // Best-effort failure visibility (see KnowledgeEngineBestEffortStats above).
+  // These three catches used to swallow their errors; they now log via
+  // console.warn AND count here, so a persistent problem on one of these
+  // paths is observable without grepping logs.
+  private bestEffortStats: KnowledgeEngineBestEffortStats = {
+    truthMaintenance: { failures: 0 },
+    reasoning: { failures: 0 },
+    entityResolution: { failures: 0 },
+  };
+  private pendingTruthMaintenance: PendingTruthMaintenance[] = [];
 
   constructor(
     private triplestore: TriplestoreAdapter,
@@ -221,6 +275,54 @@ export class KnowledgeEngine {
    */
   get registry(): GraphRegistry {
     return this.graphRegistry;
+  }
+
+  /**
+   * Snapshot of the best-effort failure counters (truth maintenance,
+   * on-write reasoning, entity resolution). A deep copy, so callers cannot
+   * mutate the engine's own counters.
+   */
+  getBestEffortStats(): KnowledgeEngineBestEffortStats {
+    return {
+      truthMaintenance: { ...this.bestEffortStats.truthMaintenance },
+      reasoning: { ...this.bestEffortStats.reasoning },
+      entityResolution: { ...this.bestEffortStats.entityResolution },
+    };
+  }
+
+  /**
+   * Open truth-maintenance repairs — supersessions whose stale-inference
+   * sweep failed, so the inferred graph may still hold conclusions drawn
+   * from a base triple that is no longer there. A copy of the in-memory
+   * list; see {@link PendingTruthMaintenance} for why there is no retry or
+   * persistence yet.
+   */
+  getPendingTruthMaintenance(): PendingTruthMaintenance[] {
+    return this.pendingTruthMaintenance.map(p => ({ ...p }));
+  }
+
+  /**
+   * Record one best-effort failure: log it (the package's convention for a
+   * swallowed-but-not-silent error, see getBindingBehaviorSection) and bump
+   * the counter for `path`.
+   */
+  private recordBestEffortFailure(
+    path: keyof KnowledgeEngineBestEffortStats,
+    prefix: string,
+    context: Record<string, string | undefined>,
+    error: unknown,
+  ): void {
+    const message = (error as Error)?.message ?? String(error);
+    const now = new Date().toISOString();
+    const ctx = Object.entries(context)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ');
+    console.warn(`[KnowledgeEngine] ${prefix}${ctx ? ` (${ctx})` : ''}:`, message);
+    const stats = this.bestEffortStats[path];
+    stats.failures += 1;
+    stats.lastError = message;
+    stats.lastErrorAt = now;
   }
 
   /**
@@ -1734,8 +1836,27 @@ export class KnowledgeEngine {
               );
             }
           }
-        } catch {
+        } catch (e) {
           // Truth maintenance is best-effort — never block belief revision.
+          // But a failure here means the inferred graph may still hold
+          // conclusions drawn from a base triple that is no longer there,
+          // so it must not vanish silently: log, count, and keep it as an
+          // open repair (see PendingTruthMaintenance — no retry/persistence
+          // in this slice, that is a later decision).
+          this.recordBestEffortFailure(
+            'truthMaintenance',
+            'truth maintenance failed',
+            { agentId, graph: claim.assertedInGraph, claim: claim.claimUri },
+            e,
+          );
+          this.pendingTruthMaintenance.push({
+            claimUri: claim.claimUri,
+            graph: claim.assertedInGraph,
+            subject: retired.subject,
+            predicate: retired.predicate,
+            failedAt: new Date().toISOString(),
+            error: (e as Error)?.message ?? String(e),
+          });
         }
       }
     }
@@ -2325,8 +2446,14 @@ export class KnowledgeEngine {
         [inputTriple],
         GraphUriResolver.getInferenceScope(context.agentId, targetGraph).aboxGraphs,
       );
-    } catch {
+    } catch (e) {
       // Reasoning is best-effort — never block ingestion if the reasoner trips.
+      this.recordBestEffortFailure(
+        'reasoning',
+        'on-write reasoning failed',
+        { agentId: context.agentId, graph: targetGraph, subject: subject.uri, predicate: predicate.uri },
+        e,
+      );
     }
   }
 
@@ -2383,8 +2510,14 @@ export class KnowledgeEngine {
               }
             }
           `);
-        } catch {
+        } catch (e) {
           // Entity resolution is best-effort — never block ingestion.
+          this.recordBestEffortFailure(
+            'entityResolution',
+            'entity resolution failed',
+            { agentId: context.agentId, graph: targetGraph, subject: userCanonical, object: namedEntityUri },
+            e,
+          );
         }
       }
     }
