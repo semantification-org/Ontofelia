@@ -542,7 +542,9 @@ export class KnowledgeEngine {
       // Only differently-typed matches remain: reusing one would merge distinct
       // entities (person "Paris" vs city "Paris"). Signal a conflict instead.
       return { conflict: true };
-    } catch { /* Expected: label lookup failed, fall through to slug-based URI */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] findEntityByLabel query failed (label=${name}):`, e instanceof Error ? e.message : String(e));
+    }
     return null;
   }
 
@@ -697,8 +699,8 @@ export class KnowledgeEngine {
         const p = res.bindings[0]['p'];
         return p && p.type === 'uri' ? p.value : null;
       }
-    } catch {
-      // Expected: label lookup failed, fall through — caller will mint a fresh URI.
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] findPropertyByLabel query failed (label=${name}):`, e instanceof Error ? e.message : String(e));
     }
     return null;
   }

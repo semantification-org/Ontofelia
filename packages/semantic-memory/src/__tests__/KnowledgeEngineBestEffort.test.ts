@@ -299,4 +299,30 @@ describe('KnowledgeEngine best-effort failure visibility', () => {
       expect.any(String),
     );
   });
+
+  it('findEntityByLabel: a triplestore query error on the write path is logged and null is returned unchanged', async () => {
+    const store = {
+      backend: 'inmemory' as const,
+      query: vi.fn().mockRejectedValue(new Error('label lookup exploded')),
+      ask: vi.fn().mockResolvedValue(false),
+      update: vi.fn().mockResolvedValue(undefined),
+      insertTriples: vi.fn().mockResolvedValue(undefined),
+    };
+    const engine = new KnowledgeEngine(store as unknown as KEStore);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // findEntityByLabel is private — called through the write path it feeds
+    // (resolveEntity) would also exercise mintDisambiguatedUri's own `ask`
+    // call, so call it directly to isolate the catch under test.
+    type EngineInternals = {
+      findEntityByLabel: (name: string, type?: string) => Promise<unknown>;
+    };
+    const result = await (engine as unknown as EngineInternals).findEntityByLabel('Alice');
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[KnowledgeEngine] findEntityByLabel query failed (label=Alice)'),
+      expect.any(String),
+    );
+  });
 });

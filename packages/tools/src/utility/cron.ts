@@ -206,7 +206,7 @@ export class CronManageTool implements ToolDefinition {
             if (newCrontab === '') {
               // Let a failed removal propagate into the outer catch below,
               // instead of swallowing it here and then reporting success —
-              // ❌ `crontab -r` failing silently used to leave the job in
+              // `crontab -r` failing silently used to leave the job in
               // place while the output still claimed it was removed.
               await execFileAsync('crontab', ['-r'], { timeout: 5000 });
             } else {
