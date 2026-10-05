@@ -95,9 +95,11 @@ export class OxigraphAdapter implements TriplestoreAdapter {
     };
   }
 
-  async query(sparql: string, _namedGraph?: string): Promise<SparqlResult> {
+  async query(sparql: string, namedGraph?: string): Promise<SparqlResult> {
     try {
-      const result = this.store.query(sparql);
+      const result = namedGraph
+        ? this.store.query(sparql, { default_graph: oxigraph.namedNode(namedGraph) })
+        : this.store.query(sparql);
 
       // oxigraph returns: boolean (ASK), Map<string,Term>[] (SELECT) or
       // Quad[] (CONSTRUCT/DESCRIBE). Both SELECT and CONSTRUCT are arrays,
@@ -249,11 +251,18 @@ export class OxigraphAdapter implements TriplestoreAdapter {
     return this.store.dump({ format: OxigraphAdapter.NQUADS_MIME });
   }
 
-  async importDataset(data: string, format: RdfFormat = 'turtle'): Promise<void> {
-    const mime = format === 'jsonld' ? 'application/ld+json' :
-                 format === 'ntriples' ? 'application/n-triples' :
-                 format === 'rdfxml' ? 'application/rdf+xml' : 'text/turtle';
-    this.store.load(data, { format: mime });
+  async importDataset(data: string, format: RdfFormat = 'turtle', graphUri?: string): Promise<void> {
+    if (format === 'trig') {
+      this.store.load(data, { format: 'application/trig' });
+    } else {
+      if (!graphUri) {
+        throw new Error(`importDataset: format '${format}' carries no graph; pass a target graph URI`);
+      }
+      const mime = format === 'jsonld' ? 'application/ld+json' :
+                   format === 'ntriples' ? 'application/n-triples' :
+                   format === 'rdfxml' ? 'application/rdf+xml' : 'text/turtle';
+      this.store.load(data, { format: mime, to_graph_name: oxigraph.namedNode(graphUri) });
+    }
     await this.flush();
   }
 
@@ -278,17 +287,5 @@ export class OxigraphAdapter implements TriplestoreAdapter {
       this.store.load(data, { format: OxigraphAdapter.NQUADS_MIME });
     }
     await this.flush();
-  }
-
-  async getInferredTriples(_agentId: string): Promise<SparqlResult> {
-    const sparql = `
-      SELECT ?s ?p ?o WHERE {
-        ?s ?p ?o .
-        FILTER NOT EXISTS {
-          GRAPH ?g { ?s ?p ?o }
-        }
-      } LIMIT 1000
-    `;
-    return this.query(sparql);
   }
 }

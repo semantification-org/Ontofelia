@@ -12,6 +12,9 @@ import { loadConfig } from '@ontofelia/config';
 
 
 
+/** Counts triples in all named graphs; the default graph holds no data. */
+export const TRIPLE_COUNT_QUERY = 'SELECT (COUNT(*) AS ?c) WHERE { GRAPH ?g { ?s ?p ?o } }';
+
 export function registerResetCommand(program: Command) {
   // ---- RESET COMMAND ----
   program
@@ -128,7 +131,7 @@ export function registerResetCommand(program: Command) {
         console.log(chalk.yellow('  ⚠ Sessions API is not reachable'));
       }
       try {
-        const sparql = 'SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o }';
+        const sparql = TRIPLE_COUNT_QUERY;
         const kgRes = await fetch(`http://127.0.0.1:${tsPort}/ontofelia/sparql`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/sparql-results+json' },

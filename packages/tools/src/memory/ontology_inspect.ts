@@ -1,5 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult, ToolPermission, ToolCategory } from '@ontofelia/core';
 import { TriplestoreAdapter } from '@ontofelia/core';
+import { GraphUriResolver, SHARED_GRAPHS } from '@ontofelia/semantic-memory';
 
 export class OntologyInspectTool implements ToolDefinition {
   name = 'ontology_inspect';
@@ -17,10 +18,15 @@ export class OntologyInspectTool implements ToolDefinition {
   constructor(private triplestore: TriplestoreAdapter) {}
 
    
-  async execute(input: unknown, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
     const startTime = Date.now();
     const args = input as { type?: 'classes' | 'properties' | 'all' };
     const type = args.type || 'all';
+
+    // The ontology lives in named graphs only: the shared TBox plus the agent's
+    // own schema graph. The default graph is empty on the embedded store.
+    const graphs = [SHARED_GRAPHS.ONTOLOGY, GraphUriResolver.getSchemaGraph(context.agentId)];
+    const graphValues = `VALUES ?g { ${graphs.map((g) => `<${g}>`).join(' ')} }`;
 
     let resultText = '';
 
@@ -28,9 +34,12 @@ export class OntologyInspectTool implements ToolDefinition {
       const classesQuery = `
         PREFIX owl: <http://www.w3.org/2002/07/owl#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        SELECT ?class ?label WHERE {
-          ?class a owl:Class .
-          OPTIONAL { ?class rdfs:label ?label }
+        SELECT DISTINCT ?class ?label WHERE {
+          ${graphValues}
+          GRAPH ?g {
+            ?class a owl:Class .
+            OPTIONAL { ?class rdfs:label ?label }
+          }
         }
       `;
       const res = await this.triplestore.query(classesQuery);
@@ -46,10 +55,13 @@ export class OntologyInspectTool implements ToolDefinition {
       const propsQuery = `
         PREFIX owl: <http://www.w3.org/2002/07/owl#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        SELECT ?prop ?domain ?range WHERE {
-          { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
-          OPTIONAL { ?prop rdfs:domain ?domain }
-          OPTIONAL { ?prop rdfs:range ?range }
+        SELECT DISTINCT ?prop ?domain ?range WHERE {
+          ${graphValues}
+          GRAPH ?g {
+            { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
+            OPTIONAL { ?prop rdfs:domain ?domain }
+            OPTIONAL { ?prop rdfs:range ?range }
+          }
         }
       `;
       const res = await this.triplestore.query(propsQuery);

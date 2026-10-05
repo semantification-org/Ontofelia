@@ -205,47 +205,4 @@ describe('Privacy: Graph Isolation (REL-2 / TODO-001)', () => {
       expect(count).toBeGreaterThan(0);
     }
   });
-
-  // ── getInferredTriples must not leak named-graph data ─────────────
-
-  it('getInferredTriples returns nothing when all data is in named graphs', async () => {
-    // This tests the exact query pattern from OxigraphAdapter.getInferredTriples()
-    const rows = await graphlessSelect(store, `
-      SELECT ?s ?p ?o WHERE {
-        ?s ?p ?o .
-        FILTER NOT EXISTS {
-          GRAPH ?g { ?s ?p ?o }
-        }
-      } LIMIT 1000
-    `);
-    expect(rows).toHaveLength(0);
-  });
-
-  // ── Consistency check query must not leak ─────────────────────────
-
-  it('checkConsistency-style query on default graph returns zero', async () => {
-    // This is the exact pattern from KnowledgeEngine.checkConsistency()
-    const rows = await graphlessSelect(store, `
-      SELECT (COUNT(*) AS ?count) WHERE {
-        ?s ?p ?o .
-        FILTER NOT EXISTS { GRAPH ?g { ?s ?p ?o } }
-      }
-    `);
-    const count = parseInt(rows[0]?.count?.value ?? '0', 10);
-    expect(count).toBe(0);
-  });
-
-  // ── ReflectionRunner-style count must not leak ────────────────────
-
-  it('reflection-style graph-less triple count returns zero', async () => {
-    // This is the exact pattern from ReflectionRunner.reflect()
-    const rows = await graphlessSelect(store, `
-      PREFIX onto: <http://ontofelia.org/ontology/>
-      SELECT (COUNT(*) AS ?count) WHERE {
-        ?s ?p ?o .
-      }
-    `);
-    const count = parseInt(rows[0]?.count?.value ?? '0', 10);
-    expect(count).toBe(0);
-  });
 });

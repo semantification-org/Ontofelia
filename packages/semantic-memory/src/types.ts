@@ -33,9 +33,3 @@ export interface StoreResult {
   newProperties: string[];
   tripleCount: number;
 }
-
-export interface ConsistencyResult {
-  consistent: boolean;
-  conflicts: Array<{ type: string; description: string; subjects: string[] }>;
-  newInferences: number;
-}

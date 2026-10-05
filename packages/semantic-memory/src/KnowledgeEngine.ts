@@ -5,7 +5,7 @@ import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
 import { ClaimProvenanceService } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
-import { FactInput, FactContext, StoreResult, ConsistencyResult } from './types.js';
+import { FactInput, FactContext, StoreResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
 const CORE_NS = 'urn:ontofelia:core#';
@@ -1381,62 +1381,6 @@ export class KnowledgeEngine {
       newEntities,
       newProperties,
       tripleCount: 1
-    };
-  }
-
-  /**
-   * Run consistency checks against the knowledge graph.
-   * Detects disjoint class violations and counts inferred triples.
-   */
-  async checkConsistency(_agentId: string): Promise<ConsistencyResult> {
-    const conflicts: Array<{ type: string; description: string; subjects: string[] }> = [];
-
-    // Check disjoint class violations
-    try {
-      const disjointQuery = `
-        PREFIX owl: <http://www.w3.org/2002/07/owl#>
-        SELECT DISTINCT ?s ?c1 ?c2 WHERE {
-          ?s a ?c1 .
-          ?s a ?c2 .
-          ?c1 owl:disjointWith ?c2 .
-          FILTER (?c1 != ?c2)
-        } LIMIT 50
-      `;
-      const res = await this.triplestore.query(disjointQuery);
-      if (res?.type === 'bindings' && res.bindings) {
-        for (const b of res.bindings) {
-          conflicts.push({
-            type: 'disjoint_violation',
-            description: `${b.s?.value} is both ${b.c1?.value} and ${b.c2?.value} which are disjoint`,
-            subjects: [b.s?.value || '']
-          });
-        }
-      }
-    } catch {
-      // Ignore query errors
-    }
-
-    // Count inferred triples (triples in default graph but not in any named graph)
-    let newInferences = 0;
-    try {
-      const countQuery = `
-        SELECT (COUNT(*) AS ?count) WHERE {
-          ?s ?p ?o .
-          FILTER NOT EXISTS { GRAPH ?g { ?s ?p ?o } }
-        }
-      `;
-      const res = await this.triplestore.query(countQuery);
-      if (res?.type === 'bindings' && res.bindings?.[0]) {
-        newInferences = parseInt(res.bindings[0].count?.value || '0', 10);
-      }
-    } catch {
-      // Ignore query errors
-    }
-
-    return {
-      consistent: conflicts.length === 0,
-      conflicts,
-      newInferences
     };
   }
 

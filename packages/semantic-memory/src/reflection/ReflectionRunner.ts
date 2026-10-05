@@ -10,7 +10,8 @@ export interface ReflectionResult {
   id: string;
   agentId: string;
   timestamp: string;
-  recentTriplesCount: number;
+  /** Number of triples in the agent's worldview graph (user graphs are not counted). */
+  worldviewTriplesCount: number;
   conflicts: ReasoningConflict[];
   suggestions: string[];
 }
@@ -28,23 +29,22 @@ export class ReflectionRunner {
     const timestamp = new Date().toISOString();
     const id = `refl-${crypto.randomBytes(4).toString('hex')}`;
 
-    // 1. Count recently stored triples.
-    // In a real system, we'd look for onto:createdAt. Here we just count them conceptually or do a rough query.
-    // For MVP, just return a dummy count if not tracking dates in triples yet.
-    let recentTriplesCount = 0;
+    // 1. Count the triples in the agent's worldview. A reflection runs without
+    // a user, so user graphs are deliberately not counted; triples carry no
+    // creation time, hence this is a total, not a "recent" count.
+    let worldviewTriplesCount = 0;
     try {
-      const recentQuery = `
-        PREFIX onto: <http://ontofelia.org/ontology/>
+      const countQuery = `
         SELECT (COUNT(*) AS ?count) WHERE {
-          ?s ?p ?o .
+          GRAPH <${GraphUriResolver.getWorldviewGraph(agentId)}> { ?s ?p ?o }
         }
       `;
-      const res = await this.triplestore.query(recentQuery);
+      const res = await this.triplestore.query(countQuery);
       if (res && res.type === 'bindings' && res.bindings && res.bindings.length > 0) {
-        recentTriplesCount = parseInt(res.bindings[0].count?.value || '0', 10);
+        worldviewTriplesCount = parseInt(res.bindings[0].count?.value || '0', 10);
       }
     } catch {
-      // Ignoriert
+      // Count is informational; a failing query must not abort the reflection.
     }
 
     // 2. Check conflicts.
@@ -76,7 +76,7 @@ export class ReflectionRunner {
       id,
       agentId,
       timestamp,
-      recentTriplesCount,
+      worldviewTriplesCount,
       conflicts,
       suggestions: conflicts.map((c: ReasoningConflict) => `Fix conflict: ${c.description}`)
     };

@@ -43,8 +43,8 @@ export function registerReasoningCommand(program: Command) {
           headers: { 'Authorization': `Bearer ${config.gateway.token}` }
         });
         if (!res.ok) throw new Error(`HTTP ${res.status} - ${await res.text()}`);
-        const data = await res.json() as { id: string, conflicts: unknown[], recentTriplesCount: number };
-        console.log(chalk.green(`✔ Reflection ${data.id} finished. Found ${data.conflicts.length} conflicts. Processed ${data.recentTriplesCount} recent triples.`));
+        const data = await res.json() as { id: string, conflicts: unknown[], worldviewTriplesCount: number };
+        console.log(chalk.green(`✔ Reflection ${data.id} finished. Found ${data.conflicts.length} conflicts. Worldview holds ${data.worldviewTriplesCount} triples.`));
       } catch (err: unknown) {
         console.error(chalk.red(`Failed to trigger reflection: ${(err as Error).message}`));
       }

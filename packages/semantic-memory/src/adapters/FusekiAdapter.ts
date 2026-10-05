@@ -192,16 +192,28 @@ export class FusekiAdapter implements TriplestoreAdapter {
     return res.text();
   }
 
-  async importDataset(data: string, format: RdfFormat = 'turtle'): Promise<void> {
-    const contentType = format === 'jsonld' ? 'application/ld+json' : 'text/turtle';
+  async importDataset(data: string, format: RdfFormat = 'turtle', graphUri?: string): Promise<void> {
     const url = new URL(this.config.endpoint + '/data');
-    
+    let contentType: string;
+    if (format === 'trig') {
+      contentType = 'application/trig';
+    } else {
+      if (!graphUri) {
+        throw new Error(`importDataset: format '${format}' carries no graph; pass a target graph URI`);
+      }
+      url.searchParams.set('graph', graphUri);
+      contentType = format === 'jsonld' ? 'application/ld+json' :
+                    format === 'ntriples' ? 'application/n-triples' :
+                    format === 'rdfxml' ? 'application/rdf+xml' : 'text/turtle';
+    }
+
+    // POST adds to the target; PUT would replace the whole graph.
     const res = await fetch(url.toString(), {
-      method: 'PUT',
+      method: 'POST',
       headers: { 'Content-Type': contentType },
       body: data
     });
-    
+
     if (!res.ok) throw new Error(`importDataset failed: ${res.statusText}`);
   }
 
@@ -215,18 +227,5 @@ export class FusekiAdapter implements TriplestoreAdapter {
 
   async restore(_backupPath: string): Promise<void> {
     throw new Error('Restore not fully supported via HTTP API automatically yet.');
-  }
-
-  /** Hole nur inferierte Tripel */
-  async getInferredTriples(agentId: string): Promise<SparqlResult> {
-    const sparql = `
-      SELECT ?s ?p ?o WHERE {
-        ?s ?p ?o .
-        FILTER NOT EXISTS {
-          GRAPH ?g { ?s ?p ?o }
-        }
-      } LIMIT 1000
-    `;
-    return this.query(sparql);
   }
 }
