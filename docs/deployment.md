@@ -149,62 +149,10 @@ sudo systemctl status ontofelia
 sudo journalctl -u ontofelia -f
 ```
 
-## Docker Compose
+## Docker
 
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  ontofelia:
-    build: .
-    ports:
-      - "18780:18780"
-    volumes:
-      - ontofelia-data:/home/node/.ontofelia
-    environment:
-      - NODE_ENV=production
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:18780/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-volumes:
-  ontofelia-data:
-```
-
-### Dockerfile
-
-```dockerfile
-FROM node:22-slim
-
-# curl is used by the healthcheck. The default Oxigraph backend is embedded
-# (no Java needed). Add `openjdk-17-jre-headless` only if you switch the
-# memory backend to the legacy Fuseki sidecar.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Copy package files
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
-COPY packages/ packages/
-COPY apps/ apps/
-
-# Install and build
-RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
-RUN pnpm install --frozen-lockfile
-RUN pnpm build
-
-# Initialize
-RUN node apps/cli/dist/index.js onboard --non-interactive
-
-EXPOSE 18780
-CMD ["node", "apps/cli/dist/index.js", "gateway", "run"]
-```
+Docker deployment is not supported at the moment. The earlier instructions were removed because they lost data (the volume path did not match the container user's home) and baked the gateway token into the image. Use the native installation described above.
+Contributions of a correct non-root image that onboards at first start into a mounted volume and receives the token at runtime are welcome.
 
 ## Reverse Proxy (nginx)
 

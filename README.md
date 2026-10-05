@@ -426,7 +426,7 @@ pnpm --filter @ontofelia/tools test
 - [x] Guardian Layer for exec commands
 - [ ] Playwright E2E test suite
 - [ ] Extended channel adapters (Slack, WhatsApp, Matrix)
-- [ ] Docker Compose deployment
+- [ ] Docker deployment (not supported yet, see docs/deployment.md)
 - [ ] Web UI: Memory browser and ontology visualization
 - [ ] Multi-agent orchestration
 - [ ] Vector search hybrid (SPARQL + embeddings)
