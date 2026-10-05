@@ -159,7 +159,7 @@ export class FusekiManager {
       const { execSync } = await import('child_process');
       execSync(`lsof -ti :${this.config.port} | xargs kill -9 2>/dev/null`, { stdio: 'pipe' });
       await new Promise(r => setTimeout(r, 500));
-    } catch { /* no process on port */ }
+    } catch { /* Expected: no process on port to kill */ }
 
     const jarPath = path.join(this.config.fusekiHome, 'fuseki-server.jar');
 

@@ -413,6 +413,8 @@ export class SemanticParser {
     try {
       return JSON.parse(jsonStr) as ParserLLMOutput;
     } catch {
+      // Expected: malformed JSON from the LLM — the caller treats a null
+      // return as "non-JSON output" and falls back to an empty parse result.
       return null;
     }
   }

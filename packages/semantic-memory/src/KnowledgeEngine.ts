@@ -204,6 +204,15 @@ export interface KnowledgeEngineBestEffortStats {
   truthMaintenance: PathStats;
   reasoning: PathStats;
   entityResolution: PathStats;
+  /**
+   * How many {@link PendingTruthMaintenance} entries were dropped (oldest
+   * first) because the in-memory list hit {@link MAX_PENDING_TRUTH_MAINTENANCE}.
+   * A dropped entry's underlying stale-inference repair is still needed — it
+   * is simply no longer tracked in-memory, so a rising count signals a
+   * persistent truth-maintenance problem that outgrew visibility via
+   * {@link KnowledgeEngine.getPendingTruthMaintenance}.
+   */
+  droppedPendingTruthMaintenance: number;
 }
 
 /**
@@ -226,6 +235,16 @@ export interface PendingTruthMaintenance {
   error: string;
 }
 
+/**
+ * Cap on the in-memory {@link PendingTruthMaintenance} list. Without a cap, a
+ * persistent truth-maintenance problem (e.g. the reasoner wedged, or a graph
+ * permanently unreachable) would grow this list without bound for the
+ * lifetime of the process. When full, the OLDEST entry is dropped to make
+ * room for the newest — see `droppedPendingTruthMaintenance` on
+ * {@link KnowledgeEngineBestEffortStats}.
+ */
+export const MAX_PENDING_TRUTH_MAINTENANCE = 1000;
+
 export class KnowledgeEngine {
   private reasoner?: ReasonableEngine;
   private logger: EngineLogger = {
@@ -247,6 +266,7 @@ export class KnowledgeEngine {
     truthMaintenance: { failures: 0 },
     reasoning: { failures: 0 },
     entityResolution: { failures: 0 },
+    droppedPendingTruthMaintenance: 0,
   };
   private pendingTruthMaintenance: PendingTruthMaintenance[] = [];
 
@@ -287,7 +307,28 @@ export class KnowledgeEngine {
       truthMaintenance: { ...this.bestEffortStats.truthMaintenance },
       reasoning: { ...this.bestEffortStats.reasoning },
       entityResolution: { ...this.bestEffortStats.entityResolution },
+      droppedPendingTruthMaintenance: this.bestEffortStats.droppedPendingTruthMaintenance,
     };
+  }
+
+  /**
+   * Append a repair to the in-memory pending-truth-maintenance list, capped
+   * at {@link MAX_PENDING_TRUTH_MAINTENANCE}. When full, the oldest entry is
+   * dropped to make room and the drop is logged and counted (see
+   * `droppedPendingTruthMaintenance` on {@link KnowledgeEngineBestEffortStats})
+   * — a persistent problem on this path must stay visible even once the list
+   * is saturated, rather than silently stop growing.
+   */
+  private pushPendingTruthMaintenance(entry: PendingTruthMaintenance): void {
+    if (this.pendingTruthMaintenance.length >= MAX_PENDING_TRUTH_MAINTENANCE) {
+      const dropped = this.pendingTruthMaintenance.shift();
+      this.bestEffortStats.droppedPendingTruthMaintenance += 1;
+      console.warn(
+        `[KnowledgeEngine] pending truth-maintenance list full (${MAX_PENDING_TRUTH_MAINTENANCE}); dropping oldest entry (claim=${dropped?.claimUri}):`,
+        'total dropped so far:', this.bestEffortStats.droppedPendingTruthMaintenance,
+      );
+    }
+    this.pendingTruthMaintenance.push(entry);
   }
 
   /**
@@ -307,7 +348,7 @@ export class KnowledgeEngine {
    * the counter for `path`.
    */
   private recordBestEffortFailure(
-    path: keyof KnowledgeEngineBestEffortStats,
+    path: 'truthMaintenance' | 'reasoning' | 'entityResolution',
     prefix: string,
     context: Record<string, string | undefined>,
     error: unknown,
@@ -501,7 +542,7 @@ export class KnowledgeEngine {
       // Only differently-typed matches remain: reusing one would merge distinct
       // entities (person "Paris" vs city "Paris"). Signal a conflict instead.
       return { conflict: true };
-    } catch { /* fall through to slug-based URI */ }
+    } catch { /* Expected: label lookup failed, fall through to slug-based URI */ }
     return null;
   }
 
@@ -657,7 +698,7 @@ export class KnowledgeEngine {
         return p && p.type === 'uri' ? p.value : null;
       }
     } catch {
-      // Triplestore error — fall through, caller will mint a fresh URI.
+      // Expected: label lookup failed, fall through — caller will mint a fresh URI.
     }
     return null;
   }
@@ -742,8 +783,8 @@ export class KnowledgeEngine {
           .map((b: Record<string, { value: string }>) => b.label?.value)
           .filter(Boolean) as string[];
       }
-    } catch {
-      // Triplestore not available
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] listKnownEntities query failed (agentId=${agentId}):`, e instanceof Error ? e.message : String(e));
     }
     return [];
   }
@@ -860,8 +901,8 @@ export class KnowledgeEngine {
             }
           }
         }
-      } catch {
-        // Skip entity on error
+      } catch (e) {
+        console.warn(`[KnowledgeEngine] getFactsAbout query failed (agentId=${agentId}, entity=${entity}):`, e instanceof Error ? e.message : String(e));
       }
     }
 
@@ -1099,8 +1140,8 @@ export class KnowledgeEngine {
         // Deduplicate
         return [...new Set(facts)].join('\n');
       }
-    } catch {
-      // Triplestore may not be available
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getRecentFacts query failed (agentId=${agentId}):`, e instanceof Error ? e.message : String(e));
     }
     return '';
   }
@@ -1165,7 +1206,8 @@ export class KnowledgeEngine {
       return await this.triplestore.ask(
         `ASK { ${valuesG} GRAPH ?g { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
       );
-    } catch {
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] isDuplicate check failed (agentId=${agentId}, subject=${subjectUri}):`, e instanceof Error ? e.message : String(e));
       return false;
     }
   }
@@ -1683,7 +1725,8 @@ export class KnowledgeEngine {
         out.push({ claimUri, objectTriple: oTriple, assertedInGraph: g });
       }
       return out;
-    } catch {
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] findConflictingClaims query failed (agentId=${agentId}, subject=${subjectUri}, predicate=${predicateUri}):`, e instanceof Error ? e.message : String(e));
       return [];
     }
   }
@@ -1703,8 +1746,8 @@ export class KnowledgeEngine {
       return await this.triplestore.ask(
         `ASK { ${valuesG} GRAPH ?g { ${sparqlIri(predicateUri)} a <${OWL_FUNCTIONAL_PROPERTY}> } }`
       );
-    } catch {
-      // Conservative default: treat as non-functional (multi-valued)
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] isFunctionalProperty query failed (predicate=${predicateUri}); conservative default: treating as non-functional (multi-valued):`, e instanceof Error ? e.message : String(e));
       return false;
     }
   }
@@ -1849,7 +1892,7 @@ export class KnowledgeEngine {
             { agentId, graph: claim.assertedInGraph, claim: claim.claimUri },
             e,
           );
-          this.pendingTruthMaintenance.push({
+          this.pushPendingTruthMaintenance({
             claimUri: claim.claimUri,
             graph: claim.assertedInGraph,
             subject: retired.subject,
@@ -2790,7 +2833,9 @@ export class KnowledgeEngine {
           sections.push(`## Greeting Text for New Users\n${greetingFact.value}`);
         }
       }
-    } catch { /* ignored */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getSystemPromptContext self-graph query failed (agentId=${agentId}); identity/drives section omitted:`, e instanceof Error ? e.message : String(e));
+    }
 
     // User graph → who is the user
     try {
@@ -2806,7 +2851,9 @@ export class KnowledgeEngine {
      } else {
         sections.push(`## User\nI do not know the user yet. On first contact, I introduce myself and ask for their name.`);
       }
-    } catch { /* ignored */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getSystemPromptContext user-graph query failed (agentId=${agentId}, userId=${userId}); user-knowledge section omitted:`, e instanceof Error ? e.message : String(e));
+    }
 
     // Onboarding goal: check for information gaps
     try {
@@ -2823,7 +2870,9 @@ export class KnowledgeEngine {
           `Store any details the user volunteers with memory_store.`
         );
       }
-    } catch { /* ignored */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getSystemPromptContext onboarding-gaps lookup failed (agentId=${agentId}, userId=${userId}); onboarding section omitted:`, e instanceof Error ? e.message : String(e));
+    }
 
     return sections.join('\n\n');
   }
@@ -2894,7 +2943,9 @@ export class KnowledgeEngine {
           gaps.push({ graph: 'user', label: req.label, question: req.question });
         }
       }
-    } catch { /* ignored */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getOnboardingGaps user-graph query failed (agentId=${agentId}, userId=${userId}):`, e instanceof Error ? e.message : String(e));
+    }
 
     // Check identity (self) graph
     try {
@@ -2908,7 +2959,9 @@ export class KnowledgeEngine {
           gaps.push({ graph: 'identity', label: req.label, question: req.question });
         }
       }
-    } catch { /* ignored */ }
+    } catch (e) {
+      console.warn(`[KnowledgeEngine] getOnboardingGaps identity-graph query failed (agentId=${agentId}):`, e instanceof Error ? e.message : String(e));
+    }
 
     return gaps;
   }
@@ -3073,8 +3126,8 @@ export class KnowledgeEngine {
         // PUT into the named graph
         await this.triplestore.putGraph(graph, ttl, 'turtle');
         seeded.push(graph);
-      } catch {
-        // File doesn't exist or Fuseki error — skip silently
+      } catch (e) {
+        console.warn(`[KnowledgeEngine] seedCoreGraphs failed for graph ${graph} (file=${file}); skipping:`, e instanceof Error ? e.message : String(e));
       }
     }
 

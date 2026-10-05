@@ -15,6 +15,7 @@ async function installCrontab(content: string): Promise<void> {
     await fs.writeFile(tempPath, content, { mode: 0o600 });
     await execFileAsync('crontab', [tempPath], { timeout: 5000 });
   } finally {
+    // Expected: best-effort temp cleanup
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -203,14 +204,19 @@ export class CronManageTool implements ToolDefinition {
             const newCrontab = lines.length > 0 ? lines.join('\n') + '\n' : '';
             
             if (newCrontab === '') {
-              await execFileAsync('crontab', ['-r'], { timeout: 5000 }).catch(() => {});
+              // Let a failed removal propagate into the outer catch below,
+              // instead of swallowing it here and then reporting success —
+              // ❌ `crontab -r` failing silently used to leave the job in
+              // place while the output still claimed it was removed.
+              await execFileAsync('crontab', ['-r'], { timeout: 5000 });
             } else {
               await installCrontab(newCrontab);
             }
-            
+
             output = `✅ Cron job "${data.removeLabel}" removed.`;
-          } catch {
-            output = '❌ Error removing cron job.';
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            output = `❌ Error removing cron job: ${message}`;
           }
           break;
         }

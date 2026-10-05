@@ -233,4 +233,70 @@ describe('KnowledgeEngine best-effort failure visibility', () => {
     expect(stats.entityResolution.failures).toBe(1);
     expect(stats.entityResolution.lastError).toContain('sameAs insert failed');
   });
+
+  it('pending truth-maintenance list is capped and drops the oldest entry once full', async () => {
+    const { store } = makeMockStore();
+    const engine = new KnowledgeEngine(store as unknown as KEStore);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Push directly via the private helper — exercising the cap through
+    // storeFact() end-to-end would need 1000+ real writes, which is both
+    // slow and unnecessary: the cap logic itself only depends on the
+    // push path, not on how an entry was produced.
+    type EngineInternals = {
+      pushPendingTruthMaintenance: (entry: {
+        claimUri: string; graph: string; subject: string; predicate: string;
+        failedAt: string; error: string;
+      }) => void;
+    };
+    const internals = engine as unknown as EngineInternals;
+
+    const total = 1005;
+    for (let i = 0; i < total; i++) {
+      internals.pushPendingTruthMaintenance({
+        claimUri: `urn:claim:${i}`,
+        graph: 'urn:ontofelia:worldview',
+        subject: 'urn:ontofelia:entity:X',
+        predicate: 'urn:ontofelia:core#p',
+        failedAt: new Date().toISOString(),
+        error: 'synthetic',
+      });
+    }
+
+    const pending = engine.getPendingTruthMaintenance();
+    expect(pending).toHaveLength(1000);
+    // The oldest 5 entries (claim 0..4) were dropped; the list keeps the
+    // most recent 1000.
+    expect(pending[0].claimUri).toBe('urn:claim:5');
+    expect(pending[pending.length - 1].claimUri).toBe(`urn:claim:${total - 1}`);
+
+    const stats = engine.getBestEffortStats();
+    expect(stats.droppedPendingTruthMaintenance).toBe(5);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('pending truth-maintenance list full'),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('listKnownEntities: a triplestore query error is logged and the fallback [] is returned unchanged', async () => {
+    const store = {
+      backend: 'inmemory' as const,
+      query: vi.fn().mockRejectedValue(new Error('triplestore down')),
+      ask: vi.fn().mockResolvedValue(false),
+      update: vi.fn().mockResolvedValue(undefined),
+      insertTriples: vi.fn().mockResolvedValue(undefined),
+    };
+    const engine = new KnowledgeEngine(store as unknown as KEStore);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await engine.listKnownEntities('ontofelia', 'owner');
+
+    expect(result).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[KnowledgeEngine] listKnownEntities query failed'),
+      expect.any(String),
+    );
+  });
 });

@@ -91,6 +91,32 @@ describe('CronManageTool', () => {
     expect(crontabRemoveCall).toBeDefined();
   });
 
+  it('reports the error and does not claim success when `crontab -r` fails', async () => {
+    const payloadPath = path.join(TEST_HOME, '.ontofelia', 'cron', 'job_myjob.json');
+    await fs.mkdir(path.dirname(payloadPath), { recursive: true });
+    await fs.writeFile(payloadPath, 'dummy', 'utf-8');
+
+    vi.mocked(cp.execFile).mockImplementation(((cmd: string, args: unknown, opts: unknown, cb: unknown) => {
+      const callback = (typeof opts === 'function' ? opts : cb) as (
+        error: Error | null,
+        result: { stdout: string; stderr: string },
+      ) => void;
+      const argv = Array.isArray(args) ? args : [];
+      if (cmd === 'crontab' && argv[0] === '-r') {
+        callback(new Error('crontab: no crontab for test'), { stdout: '', stderr: '' });
+        return undefined;
+      }
+      callback(null, { stdout: '# ontofelia: myjob\n', stderr: '' });
+      return undefined;
+    }) as unknown as typeof cp.execFile);
+
+    const res = await tool.execute({ action: 'remove', removeLabel: 'myjob' }, context);
+
+    expect(res.output).toMatch(/❌ Error removing cron job:/);
+    expect(res.output).toContain('no crontab for test');
+    expect(res.output).not.toMatch(/removed/);
+  });
+
   describe('reserved initiative- label prefix (self-schedule protection)', () => {
     it('refuses to create a job with the reserved prefix', async () => {
       const res = await tool.execute(

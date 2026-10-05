@@ -55,8 +55,8 @@ export class OntologyContextProvider {
         classes: classes.length > 0 ? classes : DEFAULT_CONTEXT.classes,
         properties,
       };
-    } catch {
-      // Triplestore not available — return default context
+    } catch (e) {
+      console.warn(`[OntologyContextProvider] getCompact query failed (agentId=${this.agentId}); returning default context:`, e instanceof Error ? e.message : String(e));
       return { ...DEFAULT_CONTEXT };
     }
   }
