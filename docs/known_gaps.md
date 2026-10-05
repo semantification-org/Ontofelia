@@ -69,5 +69,3 @@
 - **KG scaling:** embedded Oxigraph single-threaded writes
 - **Property chains:** owl:propertyChainAxiom not yet wired in the reasoner
 - **Docker deployment:** not supported (instructions removed, see [deployment.md](deployment.md))
-</content>
-</invoke>
