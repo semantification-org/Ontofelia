@@ -28,7 +28,7 @@ ontofelia rebuild
 
 ### Cron watchdog (default — what install.sh sets up)
 
-`install.sh` runs `scripts/install-daemon.sh`, which installs two crontab entries, both tagged with a managed-marker comment so re-runs replace only their own lines and leave the rest of your crontab untouched:
+`install.sh` runs `scripts/install-daemon.sh`, which installs two crontab entries, both tagged with a managed-marker comment so re-runs replace only their own lines and leave the rest of your crontab untouched. Where a usable systemd user bus is found it installs nothing and points you at `ontofelia daemon install` instead (set `ONTOFELIA_SUPERVISOR=cron` to force cron):
 
 ```cron
 */2 * * * * <repo>/scripts/gateway-watchdog.sh >> ~/.ontofelia/logs/watchdog.log 2>&1 # ontofelia-daemon (managed by scripts/install-daemon.sh)

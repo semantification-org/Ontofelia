@@ -608,8 +608,12 @@ fi
 # a user systemd bus. install-daemon.sh is idempotent and leaves the already
 # running gateway alone.
 if [ -x "$SCRIPT_DIR/scripts/install-daemon.sh" ]; then
-  if "$SCRIPT_DIR/scripts/install-daemon.sh" >/dev/null 2>&1; then
-    ok "Always-on supervision installed ${DIM}(cron watchdog + @reboot)${NC}"
+  if daemon_out=$("$SCRIPT_DIR/scripts/install-daemon.sh" 2>&1); then
+    if [[ "$daemon_out" == *"systemd user bus found"* ]]; then
+      ok "systemd user bus found ${DIM}(no cron installed — run: ontofelia daemon install)${NC}"
+    else
+      ok "Always-on supervision installed ${DIM}(cron watchdog + @reboot)${NC}"
+    fi
   else
     warn "Could not install cron supervision — the gateway is up, but auto-restart is off (see docs/deployment.md, \"Keeping the gateway running\")"
   fi

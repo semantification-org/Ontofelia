@@ -7,11 +7,17 @@
 # at ~/.ontofelia/gateway.pid and logs to ~/.ontofelia/logs/gateway.log). No
 # container, no image to build.
 #
-# Always-on supervision: where a user systemd bus is available you may prefer a
-# --user service (see docs/deployment.md, "Keeping the gateway running"); this
-# installer targets the lowest common denominator and uses cron — a watchdog
-# every 2 minutes plus an @reboot start — as the lightweight replacement for
-# Docker's `--restart unless-stopped`.
+# Always-on supervision: pick ONE supervisor (see docs/deployment.md, "Keeping
+# the gateway running"). Where a usable systemd user bus is found, this script
+# installs nothing and points at `ontofelia daemon install` (the systemd --user
+# unit); otherwise it falls back to cron — a watchdog every 2 minutes plus an
+# @reboot start — as the lightweight replacement for Docker's
+# `--restart unless-stopped`.
+#
+# Environment:
+#   ONTOFELIA_SUPERVISOR=cron   force the cron path even when a systemd user
+#                               bus is usable.
+#   ONTOFELIA_PORT              gateway port (default: configured port, else 18780).
 #
 # Idempotent: safe to re-run. Run after install.sh has built the project.
 set -uo pipefail
@@ -31,6 +37,26 @@ if [ -z "$PORT" ] && [ -f "$CONF" ]; then
   PORT=$(sed -n 's/^[[:space:]]*"\{0,1\}port"\{0,1\}[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CONF" | head -n 1)
 fi
 PORT="${PORT:-18780}"
+
+# A usable systemd user bus means the systemd --user unit is the better
+# supervisor — do not add a second one (cron) next to it. "Usable": `systemctl
+# --user is-system-running` reports running/degraded (or exits 0) AND the user
+# bus socket exists. ONTOFELIA_SUPERVISOR=cron skips this check.
+systemd_user_bus_usable() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  local state rc
+  state=$(systemctl --user is-system-running 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$state" != "running" ] && [ "$state" != "degraded" ]; then
+    return 1
+  fi
+  [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]
+}
+
+if [ "${ONTOFELIA_SUPERVISOR:-}" != "cron" ] && systemd_user_bus_usable; then
+  echo "systemd user bus found — use 'ontofelia daemon install' for supervision (cron not installed)"
+  exit 0
+fi
 
 # 0. cron is the supervision mechanism here — bail out clearly where it is
 #    missing (minimal containers, some NAS boxes, macOS without cron enabled).

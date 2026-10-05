@@ -63,6 +63,32 @@ code="${code:-000}"
 
 log "health=$code → recovering gateway"
 
+# Never touch a gateway that belongs to another user. Without root, `ss -p`
+# lists pid= only for the caller's own processes, so a listener on the port
+# with no pid of ours behind it is somebody else's. Restarting would start a
+# second gateway on the same port with its own triplestore.
+# If `ss` is missing the check is skipped (logged) and the restart proceeds as
+# before.
+if command -v ss >/dev/null 2>&1; then
+  listener=$(ss -ltnpH "sport = :$PORT" 2>/dev/null || true)
+  if [ -n "$listener" ]; then
+    my_uid=$(id -u)
+    own=0
+    for lpid in $(printf '%s\n' "$listener" | grep -o 'pid=[0-9][0-9]*' | cut -d= -f2); do
+      if [ "$(ps -o uid= -p "$lpid" 2>/dev/null | tr -d '[:space:]')" = "$my_uid" ]; then
+        own=1
+        break
+      fi
+    done
+    if [ "$own" -eq 0 ]; then
+      log "gateway on port $PORT is not owned by $(id -un); not touching it"
+      exit 3
+    fi
+  fi
+else
+  log "ss not found — cannot check who owns port $PORT; continuing with restart"
+fi
+
 # If the PID file points at a live-but-unhealthy process, it is hung: terminate
 # it first so the restart does not create a second writer on the triplestore.
 if [ -f "$PIDF" ]; then
