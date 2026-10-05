@@ -2584,23 +2584,32 @@ Users can use these commands:
         const currentToolCalls = [];
         let chunkCount = 0;
 
-        for await (const chunk of stream) {
-          chunkCount++;
-          if (chunk.type === 'text_delta') {
-            finalContent += chunk.content;
-            yield { type: 'text_delta', content: chunk.content };
-          } else if (chunk.type === 'done') {
-            if (chunk.response.toolCalls) {
-              currentToolCalls.push(...chunk.response.toolCalls);
+        try {
+          for await (const chunk of stream) {
+            chunkCount++;
+            if (chunk.type === 'text_delta') {
+              finalContent += chunk.content;
+              yield { type: 'text_delta', content: chunk.content };
+            } else if (chunk.type === 'done') {
+              if (chunk.response.toolCalls) {
+                currentToolCalls.push(...chunk.response.toolCalls);
+              }
+              if (chunk.response.usage) {
+                usage = chunk.response.usage;
+              }
+            } else if (chunk.type === 'error') {
+              primaryStreamError = chunk.error || 'Unknown stream error';
+              this.emitDebug('error', `Stream error received: ${primaryStreamError}`);
+              break;
             }
-            if (chunk.response.usage) {
-              usage = chunk.response.usage;
-            }
-          } else if (chunk.type === 'error') {
-            primaryStreamError = chunk.error || 'Unknown stream error';
-            this.emitDebug('error', `Stream error received: ${primaryStreamError}`);
-            break;
           }
+        } catch (iterErr: unknown) {
+          // An error thrown mid-iteration is handled like an error chunk: the
+          // fallback below runs. Partially collected tool calls are discarded
+          // so no further tool round starts.
+          primaryStreamError = (iterErr as Error).message || 'Unknown stream error';
+          this.emitDebug('error', `Stream iteration error with ${currentModel}: ${primaryStreamError}`);
+          currentToolCalls.length = 0;
         }
         
         this.emitDebug('llm_response', `LLM stream response round ${rounds}`, { chunkCount, toolCalls: currentToolCalls.length, usage });
