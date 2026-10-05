@@ -1,4 +1,5 @@
 @prefix onto: <urn:ontofelia:core#> .
+@prefix core: <urn:shared:ontology#> .
 @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
@@ -168,6 +169,79 @@ onto:sessionId rdf:type owl:DatatypeProperty ;
 onto:createdAt rdf:type owl:DatatypeProperty ;
     rdfs:domain onto:Provenance ;
     rdfs:range xsd:dateTime .
+
+# === Claim Model (urn:shared:ontology#) ===
+# Bookkeeping vocabulary of truth maintenance: claims live in the agent claims
+# graph, evidence in the evidence graph, conflicts in the conflicts graph. These
+# terms describe the memory itself, not the world, so they are kept out of the
+# entity-type and property lists offered to the fact parser.
+core:Claim rdf:type owl:Class ;
+    rdfs:label "Claim" ;
+    rdfs:comment "A recorded assertion of one fact (subject, predicate, object) with its status and provenance" .
+
+core:Evidence rdf:type owl:Class ;
+    rdfs:label "Evidence" ;
+    rdfs:comment "The source a claim rests on, such as a message span, tool result or document" .
+
+core:Conflict rdf:type owl:Class ;
+    rdfs:label "Conflict" ;
+    rdfs:comment "An audit record of a contradiction or supersession between claims" .
+
+core:claimSubject rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Claim ;
+    rdfs:label "claim subject" ;
+    rdfs:comment "The subject entity of the claimed triple" .
+
+core:claimPredicate rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Claim ;
+    rdfs:label "claim predicate" ;
+    rdfs:comment "The predicate of the claimed triple" .
+
+core:claimObject rdf:type rdf:Property ;
+    rdfs:domain core:Claim ;
+    rdfs:label "claim object" ;
+    rdfs:comment "The object of the claimed triple, an entity or a literal" .
+
+core:status rdf:type owl:DatatypeProperty ;
+    rdfs:label "status" ;
+    rdfs:comment "Lifecycle state: accepted, rejected or superseded for a claim; resolved for a conflict" .
+
+core:assertedInGraph rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Claim ;
+    rdfs:label "asserted in graph" ;
+    rdfs:comment "The named graph that holds the accepted triple of this claim" .
+
+core:supersededBy rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Claim ;
+    rdfs:range core:Claim ;
+    rdfs:label "superseded by" ;
+    rdfs:comment "The later claim that replaced this one under belief revision" .
+
+core:supersededAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain core:Claim ;
+    rdfs:range xsd:dateTime ;
+    rdfs:label "superseded at" ;
+    rdfs:comment "When this claim was replaced by a later one" .
+
+core:supersededClaim rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Conflict ;
+    rdfs:range core:Claim ;
+    rdfs:label "superseded claim" ;
+    rdfs:comment "The claim that a supersession retired" .
+
+core:supersedingClaim rdf:type owl:ObjectProperty ;
+    rdfs:domain core:Conflict ;
+    rdfs:range core:Claim ;
+    rdfs:label "superseding claim" ;
+    rdfs:comment "The claim that replaced the superseded one" .
+
+core:conflictType rdf:type owl:DatatypeProperty ;
+    rdfs:domain core:Conflict ;
+    rdfs:label "conflict type" .
+
+core:detectedAt rdf:type owl:DatatypeProperty ;
+    rdfs:domain core:Conflict ;
+    rdfs:label "detected at" .
 
 # === Reasoning Markers ===
 onto:inferredBy rdf:type owl:AnnotationProperty ;

@@ -1127,10 +1127,14 @@ export class KnowledgeEngine {
    * The claim object stays in the claims graph with status "superseded" so
    * the history is preserved (concept §4 — explainable change). A conflict
    * record is also written so the supersession is visible to monitoring.
+   * The old claim points forward to the claim that replaced it
+   * (core:supersededBy) and the Conflict names both sides, so history can be
+   * walked old → new: what replaced this, when, and why.
    */
   private async retireSupersededClaim(
     claim: { claimUri: string; objectTriple: string; assertedInGraph: string },
     agentId: string,
+    supersedingClaimUri: string,
   ): Promise<void> {
     const now = new Date().toISOString();
     const conflictsGraph = GraphUriResolver.getConflictsGraph(agentId);
@@ -1143,7 +1147,8 @@ export class KnowledgeEngine {
       INSERT {
         GRAPH ?g {
           <${claim.claimUri}> core:status "superseded" .
-          <${claim.claimUri}> core:supersededAt "${now}" .
+          <${claim.claimUri}> core:supersededAt "${now}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+          <${claim.claimUri}> core:supersededBy <${supersedingClaimUri}> .
         }
       }
       WHERE { GRAPH ?g { <${claim.claimUri}> core:status "accepted" . } }
@@ -1229,6 +1234,7 @@ export class KnowledgeEngine {
           <${conflictUri}> a core:Conflict ;
             core:conflictType "supersession" ;
             core:supersededClaim <${claim.claimUri}> ;
+            core:supersedingClaim <${supersedingClaimUri}> ;
             core:detectedAt "${now}" ;
             core:status "resolved" .
         }
@@ -1319,6 +1325,10 @@ export class KnowledgeEngine {
   // auditable. Without this step, "Anna wohnt in Köln, nicht Hamburg" would
   // leave both Köln and Hamburg in the graph forever.
   const supersededClaims: string[] = [];
+  // The superseding claim's URI is minted here, before the old claim is
+  // retired, so the old claim can point forward to it; createClaim below
+  // stores the claim under exactly this URI.
+  const newClaimUri = this.claimService.mintClaimUri();
   if (status === 'accepted') {
     // Only supersede when the predicate IS functional (owl:FunctionalProperty)
     // or there is a genuine logical contradiction. Multi-valued / time-
@@ -1331,7 +1341,7 @@ export class KnowledgeEngine {
       );
       if (conflicting.length > 0) {
         for (const c of conflicting) {
-          await this.retireSupersededClaim(c, context.agentId);
+          await this.retireSupersededClaim(c, context.agentId, newClaimUri);
           supersededClaims.push(c.claimUri);
         }
       }
@@ -1465,7 +1475,8 @@ export class KnowledgeEngine {
       claimsGraph,
       status,
       evidenceUri,
-      evidenceGraph
+      evidenceGraph,
+      newClaimUri,
     );
 
     return {

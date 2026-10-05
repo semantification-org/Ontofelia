@@ -62,6 +62,7 @@ export class MemoryExplainTool implements ToolDefinition {
       PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT ?predicate ?predicateLabel ?object ?status ?confidence ?confidenceLabel
              ?sourceKind ?learnedAt ?sourceSpan ?evidence ?evidenceGraph
+             ?supersededAt ?supersededBy ?supersededByObject
       WHERE {
         ${claimGraphValues}
         GRAPH <${claimsGraph}> {
@@ -78,6 +79,14 @@ export class MemoryExplainTool implements ToolDefinition {
           OPTIONAL { ?claim claim:sourceSpan      ?sourceSpan . }
           OPTIONAL { ?claim claim:hasEvidence     ?evidence . }
           OPTIONAL { ?claim claim:evidenceGraph   ?evidenceGraph . }
+          OPTIONAL { ?claim claim:supersededAt    ?supersededAt . }
+          # The replacement is shown only when it lives in a graph the caller
+          # may read (?ag is already restricted above).
+          OPTIONAL {
+            ?claim claim:supersededBy ?supersededBy .
+            ?supersededBy claim:claimObject ?supersededByObject ;
+                          (claim:assertedInGraph|claim:targetGraph) ?ag .
+          }
         }
         OPTIONAL { ${labelValues} GRAPH ?g { ?predicate rdfs:label ?predicateLabel } }
       }
@@ -99,7 +108,13 @@ export class MemoryExplainTool implements ToolDefinition {
             learnedAt: b.learnedAt?.value,
             sourceSpan: b.sourceSpan?.value,
             evidence: b.evidence?.value,
-            evidenceGraph: b.evidenceGraph?.value
+            evidenceGraph: b.evidenceGraph?.value,
+            supersededAt: b.supersededAt?.value,
+            supersededBy: b.supersededBy?.value,
+            supersededByObject: b.supersededByObject?.value,
+            explanation: b.status?.value === 'superseded'
+              ? `superseded${b.supersededByObject ? ` by ${b.supersededByObject.value}` : ''}${b.supersededAt ? ` at ${b.supersededAt.value}` : ''}`
+              : undefined
           });
         }
       }
