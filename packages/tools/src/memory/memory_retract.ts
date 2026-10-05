@@ -63,6 +63,19 @@ export class MemoryRetractTool implements ToolDefinition {
       throw e;
     }
 
+    // A caller may only retract from the agent worldview or its own user graph.
+    // Another user's graph is refused before anything is touched.
+    const allowedGraphs = [GraphUriResolver.getWorldviewGraph(context.agentId)];
+    if (context.senderId) allowedGraphs.push(GraphUriResolver.getUserGraph(context.agentId, context.senderId));
+    if (!allowedGraphs.includes(targetGraph)) {
+      return this.fail(
+        args,
+        startTime,
+        `Refused: <${targetGraph}> is not a graph you may retract from. ` +
+          `Allowed graphs: ${allowedGraphs.map((g) => `<${g}>`).join(', ')}. Nothing was changed.`,
+      );
+    }
+
     const claimsGraph = GraphUriResolver.getClaimsGraph(context.agentId);
     const evidenceGraph = GraphUriResolver.getEvidenceGraph(context.agentId);
 
@@ -96,6 +109,7 @@ export class MemoryRetractTool implements ToolDefinition {
           ?claim a claim:Claim ;
                  claim:claimSubject   <${args.subject}> ;
                  claim:claimPredicate <${args.predicate}> ;
+                 (claim:assertedInGraph|claim:targetGraph) <${targetGraph}> ;
                  ${objectFilter}
                  ?cp ?co .
           OPTIONAL { ?claim claim:hasEvidence ?evidence . }

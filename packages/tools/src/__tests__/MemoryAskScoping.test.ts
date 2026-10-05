@@ -55,6 +55,7 @@ beforeEach(async () => {
   await insert(`urn:${AGENT}:claims`,
     `<urn:c:1> a <${CLAIM}Claim> ; <${CLAIM}claimSubject> <${E}Hamburg> ;
        <${CLAIM}claimPredicate> <urn:ontofelia:core#livesIn> ; <${CLAIM}claimObject> <${E}X> ;
+       <${CLAIM}assertedInGraph> <urn:${AGENT}:worldview> ;
        <${CLAIM}learnedAt> "2026-01-01T00:00:00Z" ; <${CLAIM}confidenceLabel> "high" ;
        <${CLAIM}status> "accepted" .`);
 });

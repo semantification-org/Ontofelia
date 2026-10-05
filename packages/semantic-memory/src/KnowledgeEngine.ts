@@ -966,13 +966,16 @@ export class KnowledgeEngine {
    *
    * The query is scoped to this agent's claims graph and ignores claims that
    * are already superseded/retracted/rejected — only currently accepted
-   * claims compete with the incoming fact.
+   * claims compete with the incoming fact. Only claims asserted in the graph
+   * the new fact is written to can compete: a fact in one user's graph never
+   * retires a claim (or deletes a triple) that lives in another graph.
    */
   private async findConflictingClaims(
     subjectUri: string,
     predicateUri: string,
     newObjectTriple: string,
     agentId: string,
+    targetGraph: string,
   ): Promise<Array<{ claimUri: string; objectTriple: string; assertedInGraph: string }>> {
     const claimsGraph = GraphUriResolver.getClaimsGraph(agentId);
     const sparql = `
@@ -985,6 +988,7 @@ export class KnowledgeEngine {
                  core:claimObject     ?o ;
                  core:assertedInGraph ?g ;
                  core:status          "accepted" .
+          FILTER (?g = <${targetGraph}>)
         }
       }
     `;
@@ -997,6 +1001,7 @@ export class KnowledgeEngine {
         const oTerm = b['o'];
         const g = b['g']?.value;
         if (!claimUri || !oTerm || !g) continue;
+        if (g !== targetGraph) continue; // defence in depth: same graph only
         const oTriple = oTerm.type === 'uri' ? `<${oTerm.value}>`
           : `"${this.escapeLiteral(oTerm.value)}"`;
         if (oTriple === newObjectTriple) continue; // not a conflict — same fact
@@ -1233,7 +1238,7 @@ export class KnowledgeEngine {
     const functional = await this.isFunctionalProperty(predicate.uri, context.agentId);
     if (functional) {
       const conflicting = await this.findConflictingClaims(
-        subject.uri, predicate.uri, objectTriple, context.agentId,
+        subject.uri, predicate.uri, objectTriple, context.agentId, targetGraph,
       );
       if (conflicting.length > 0) {
         for (const c of conflicting) {

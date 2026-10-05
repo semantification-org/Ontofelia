@@ -106,16 +106,20 @@ export class MemoryAskTool implements ToolDefinition {
           }`;
         break;
       case 'recent_facts':
-        // Recency comes from the claim's learnedAt timestamp.
+        // Recency comes from the claim's learnedAt timestamp. Claims live in
+        // one agent-wide graph, so they are restricted to those asserted in
+        // the graphs this call may read.
         sparql = `
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?learnedAt WHERE {
+            ${values('?ag', factGraphs)}
             GRAPH <${claimsGraph}> {
               ?claim a claim:Claim ;
                      claim:claimSubject   ?s ;
                      claim:claimPredicate ?p ;
                      claim:claimObject    ?o ;
+                     claim:assertedInGraph ?ag ;
                      claim:learnedAt      ?learnedAt ;
                      claim:status         "accepted" .
             }
@@ -131,11 +135,13 @@ export class MemoryAskTool implements ToolDefinition {
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?confidence WHERE {
+            ${values('?ag', factGraphs)}
             GRAPH <${claimsGraph}> {
               ?claim a claim:Claim ;
                      claim:claimSubject    ?s ;
                      claim:claimPredicate  ?p ;
                      claim:claimObject     ?o ;
+                     claim:assertedInGraph ?ag ;
                      claim:confidenceLabel ?confidence ;
                      claim:status          "accepted" .
               FILTER(LCASE(STR(?confidence)) = LCASE("${data.confidence.replace(/"/g, '')}"))

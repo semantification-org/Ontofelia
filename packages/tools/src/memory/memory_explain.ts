@@ -43,9 +43,15 @@ export class MemoryExplainTool implements ToolDefinition {
     const claimsGraph = GraphUriResolver.getClaimsGraph(context.agentId);
     // Labels come from the worldview, the acting user's own graph, the shared
     // ontology and the schema graph — never from another user's graph.
-    const labelGraphs = [
+    // Claims are restricted to those asserted in the worldview or the acting
+    // user's own graph (a rejected claim records its graph as targetGraph).
+    const factGraphs = [
       GraphUriResolver.getWorldviewGraph(context.agentId),
       ...(context.senderId ? [GraphUriResolver.getUserGraph(context.agentId, context.senderId)] : []),
+    ];
+    const claimGraphValues = `VALUES ?ag { ${factGraphs.map((g) => `<${g}>`).join(' ')} }`;
+    const labelGraphs = [
+      ...factGraphs,
       SHARED_GRAPHS.ONTOLOGY,
       GraphUriResolver.getSchemaGraph(context.agentId),
     ];
@@ -57,12 +63,14 @@ export class MemoryExplainTool implements ToolDefinition {
       SELECT ?predicate ?predicateLabel ?object ?status ?confidence ?confidenceLabel
              ?sourceKind ?learnedAt ?sourceSpan ?evidence ?evidenceGraph
       WHERE {
+        ${claimGraphValues}
         GRAPH <${claimsGraph}> {
           ?claim a claim:Claim ;
                  claim:claimSubject   <${entityUri}> ;
                  claim:claimPredicate ?predicate ;
                  claim:claimObject    ?object ;
-                 claim:status         ?status .
+                 claim:status         ?status ;
+                 (claim:assertedInGraph|claim:targetGraph) ?ag .
           OPTIONAL { ?claim claim:confidence      ?confidence . }
           OPTIONAL { ?claim claim:confidenceLabel ?confidenceLabel . }
           OPTIONAL { ?claim claim:sourceKind      ?sourceKind . }

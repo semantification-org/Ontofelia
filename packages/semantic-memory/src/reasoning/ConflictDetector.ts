@@ -30,6 +30,7 @@ export class ConflictDetector {
    *    This is the most common conflict per concept §4 (belief revision)
    *    and is critical for the conflicts graph to ever populate during
    *    normal use. Before this method existed, the conflicts graph was dead.
+   *    Only claims asserted in the worldview or the given user's graph count.
    */
   async detectConflicts(agentId: string, userId?: string): Promise<ReasoningConflict[]> {
     const conflicts: ReasoningConflict[] = [];
@@ -99,16 +100,20 @@ export class ConflictDetector {
       const clashQuery = `
         PREFIX core: <${CORE_NS}>
         SELECT DISTINCT ?s ?p ?o1 ?o2 WHERE {
+          ${values('?ag', aboxGraphs)}
+          ${values('?ag2', aboxGraphs)}
           GRAPH <${claimsGraph}> {
             ?c1 a core:Claim ;
                 core:claimSubject   ?s ;
                 core:claimPredicate ?p ;
                 core:claimObject    ?o1 ;
+                core:assertedInGraph ?ag ;
                 core:status         "accepted" .
             ?c2 a core:Claim ;
                 core:claimSubject   ?s ;
                 core:claimPredicate ?p ;
                 core:claimObject    ?o2 ;
+                core:assertedInGraph ?ag2 ;
                 core:status         "accepted" .
             FILTER (STR(?o1) < STR(?o2))
           }

@@ -189,3 +189,60 @@ describe('ConflictDetector is scoped to worldview + the given user', () => {
     expect(range.map(c => c.subjects[0])).toEqual([`${E}Wv`]);
   });
 });
+
+describe('claim supersession and clashes stay inside one graph', () => {
+  const LIVES = 'urn:ontofelia:core#livesIn';
+  const CORE = 'urn:shared:ontology#';
+  let store: OxigraphAdapter;
+  let engine: KnowledgeEngine;
+
+  async function claimStatus(obj: string): Promise<string[]> {
+    const r = await store.query(
+      `SELECT ?st WHERE { GRAPH <urn:${AGENT}:claims> { ?c <${CORE}claimObject> <${E}${obj}> ; <${CORE}status> ?st } }`);
+    return ((r as unknown as { bindings: Array<{ st: { value: string } }> }).bindings).map(b => b.st.value);
+  }
+
+  beforeEach(async () => {
+    store = await makeStore();
+    engine = new KnowledgeEngine(store as never);
+    await insert(store, ONTOLOGY,
+      `<${LIVES}> a <http://www.w3.org/2002/07/owl#ObjectProperty>, <http://www.w3.org/2002/07/owl#FunctionalProperty> .`);
+    // Bob's private graph and its claim talk about the shared entity Anna.
+    await insert(store, BOB_GRAPH, `<${E}Anna> <${LIVES}> <${E}Bremen> .`);
+    await insert(store, `urn:${AGENT}:claims`,
+      `<urn:claim:bob1> a <${CORE}Claim> ; <${CORE}claimSubject> <${E}Anna> ;
+         <${CORE}claimPredicate> <${LIVES}> ; <${CORE}claimObject> <${E}Bremen> ;
+         <${CORE}assertedInGraph> <${BOB_GRAPH}> ; <${CORE}status> "accepted" .`);
+  });
+
+  const aliceLivesIn = (place: string) => engine.storeFact(
+    { subject: 'Anna', subjectType: 'Person', predicate: 'livesIn', object: place,
+      objectType: 'Place', sourceKind: 'agent' },
+    aliceCtx,
+  );
+
+  it('a fact written for Alice does not supersede a claim asserted in Bob\'s graph', async () => {
+    const res = await aliceLivesIn('Hamburg');
+    expect(res.success).toBe(true);
+    expect(await claimStatus('Bremen')).toEqual(['accepted']);
+    expect(await store.ask(`ASK { GRAPH <${BOB_GRAPH}> { <${E}Anna> <${LIVES}> <${E}Bremen> } }`)).toBe(true);
+  });
+
+  it('a conflicting fact within the SAME graph still supersedes', async () => {
+    await aliceLivesIn('Hamburg');
+    await aliceLivesIn('Koeln');
+    expect(await claimStatus('Hamburg')).toEqual(['superseded']);
+    expect(await store.ask(`ASK { GRAPH <${WORLDVIEW}> { <${E}Anna> <${LIVES}> <${E}Hamburg> } }`)).toBe(false);
+    expect(await store.ask(`ASK { GRAPH <${WORLDVIEW}> { <${E}Anna> <${LIVES}> <${E}Koeln> } }`)).toBe(true);
+  });
+
+  it('claim clashes are only reported within worldview + the given user', async () => {
+    await aliceLivesIn('Hamburg');
+    const detector = new ConflictDetector(store as never);
+    const clashes = async (u?: string) =>
+      (await detector.detectConflicts(AGENT, u)).filter(c => c.type === 'claim_clash');
+    expect(await clashes('alice')).toHaveLength(0);
+    expect(await clashes(undefined)).toHaveLength(0);
+    expect(await clashes('bob')).toHaveLength(1);
+  });
+});
