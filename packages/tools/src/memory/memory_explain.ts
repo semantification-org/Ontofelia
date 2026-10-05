@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
-import { GraphUriResolver } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, SHARED_GRAPHS } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -41,6 +41,15 @@ export class MemoryExplainTool implements ToolDefinition {
     // Provenance is modelled as core:Claim objects in the claims graph; the
     // raw source text lives in the evidence graph (linked via hasEvidence).
     const claimsGraph = GraphUriResolver.getClaimsGraph(context.agentId);
+    // Labels come from the worldview, the acting user's own graph, the shared
+    // ontology and the schema graph — never from another user's graph.
+    const labelGraphs = [
+      GraphUriResolver.getWorldviewGraph(context.agentId),
+      ...(context.senderId ? [GraphUriResolver.getUserGraph(context.agentId, context.senderId)] : []),
+      SHARED_GRAPHS.ONTOLOGY,
+      GraphUriResolver.getSchemaGraph(context.agentId),
+    ];
+    const labelValues = `VALUES ?g { ${labelGraphs.map((g) => `<${g}>`).join(' ')} }`;
 
     const sparql = `
       PREFIX claim: <${CLAIM_NS}>
@@ -62,7 +71,7 @@ export class MemoryExplainTool implements ToolDefinition {
           OPTIONAL { ?claim claim:hasEvidence     ?evidence . }
           OPTIONAL { ?claim claim:evidenceGraph   ?evidenceGraph . }
         }
-        OPTIONAL { GRAPH ?g { ?predicate rdfs:label ?predicateLabel } }
+        OPTIONAL { ${labelValues} GRAPH ?g { ?predicate rdfs:label ?predicateLabel } }
       }
       ORDER BY DESC(?learnedAt)`;
 

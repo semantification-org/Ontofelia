@@ -211,14 +211,19 @@ export class KnowledgeEngine {
   private async findEntityByLabel(
     name: string,
     type?: string,
+    graphs: string[] = [TBOX_GRAPH],
   ): Promise<{ uri: string } | { conflict: true } | null> {
     const needle = this.escapeLiteral(name.trim().toLowerCase());
     try {
       const res = await this.triplestore.query(`
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT ?e ?t WHERE {
+          ${this.graphValuesClause(graphs, '?g')}
           GRAPH ?g { ?e rdfs:label ?l }
-          OPTIONAL { GRAPH ?tg { ?e a ?t } }
+          OPTIONAL {
+            ${this.graphValuesClause(graphs, '?tg')}
+            GRAPH ?tg { ?e a ?t }
+          }
           FILTER(LCASE(STR(?l)) = "${needle}")
         } LIMIT 50
       `);
@@ -265,9 +270,15 @@ export class KnowledgeEngine {
    * it is already taken (by the conflicting entity) a type-derived suffix — and,
    * if necessary, a counter — is appended.
    */
-  private async mintDisambiguatedUri(name: string, type?: string): Promise<string> {
+  private async mintDisambiguatedUri(
+    name: string,
+    type?: string,
+    graphs: string[] = [TBOX_GRAPH],
+  ): Promise<string> {
     const base = this.toEntityUri(name);
-    const isTaken = (u: string) => this.triplestore.ask(`ASK { GRAPH ?g { <${u}> a ?t } }`);
+    const valuesG = this.graphValuesClause(graphs, '?g');
+    const isTaken = (u: string) =>
+      this.triplestore.ask(`ASK { ${valuesG} GRAPH ?g { <${u}> a ?t } }`);
     if (!(await isTaken(base))) return base;
 
     const suffix = type ? '_' + encodeURIComponent(type.trim().replace(/\s+/g, '_')) : '';
@@ -290,29 +301,40 @@ export class KnowledgeEngine {
    *      reused — a disambiguated URI is minted so "Paris (person)" and
    *      "Paris (city)" stay distinct.
    *   3. slug URI       — derive a fresh URI from the name.
+   *
+   * Lookups (label match, "already exists") only read the graphs the acting
+   * agent/user may see: with `scope`, that is the worldview, the user's own
+   * graph, the agent's self graph, the shared ontology and the schema graph.
+   * Without `scope` (no agent/user context) only the target `agentGraph` and
+   * the shared ontology are read — never another user's graph.
    */
   async resolveEntity(
     name: string,
     type?: string,
     agentGraph?: string,
-    canonicalUri?: string
+    canonicalUri?: string,
+    scope?: { agentId: string; userId?: string },
   ): Promise<{ uri: string; isNew: boolean }> {
+    const lookupGraphs = scope
+      ? [...this.labelGraphsFor(scope.agentId, scope.userId), GraphUriResolver.getSelfGraph(scope.agentId)]
+      : [...new Set([...(agentGraph ? [agentGraph] : []), TBOX_GRAPH])];
+    const valuesG = this.graphValuesClause(lookupGraphs, '?g');
     let uri: string;
     if (canonicalUri) {
       uri = canonicalUri;
     } else {
-      const match = await this.findEntityByLabel(name, type);
+      const match = await this.findEntityByLabel(name, type, lookupGraphs);
       if (match && 'uri' in match) {
         uri = match.uri;
       } else if (match && 'conflict' in match) {
-        uri = await this.mintDisambiguatedUri(name, type);
+        uri = await this.mintDisambiguatedUri(name, type, lookupGraphs);
       } else {
         uri = this.toEntityUri(name);
       }
     }
 
     // Check if entity already exists anywhere
-    const exists = await this.triplestore.ask(`ASK { GRAPH ?g { <${uri}> a ?type } }`);
+    const exists = await this.triplestore.ask(`ASK { ${valuesG} GRAPH ?g { <${uri}> a ?type } }`);
 
     if (!exists && type) {
       const classUri = this.typeToClassUri(type);
@@ -416,7 +438,8 @@ export class KnowledgeEngine {
     if (labelMatch) return { uri: labelMatch, isNew: false };
 
     // 2. Known if defined in any graph — shared TBox or any agent schema graph.
-    const isKnown = await this.triplestore.ask(`ASK { GRAPH ?g { <${uri}> a ?type } }`);
+    const knownG = this.graphValuesClause(this.labelGraphsFor(agentId), '?g');
+    const isKnown = await this.triplestore.ask(`ASK { ${knownG} GRAPH ?g { <${uri}> a ?type } }`);
     if (isKnown) return { uri, isNew: false };
 
     // 3. Register the new predicate in the agent-local schema graph.
@@ -494,6 +517,20 @@ export class KnowledgeEngine {
     return graphs;
   }
 
+  /**
+   * Graphs a lookup (labels, types, property declarations) may read for the
+   * given agent/user: the readable knowledge graphs (see `knowledgeGraphsFor`)
+   * plus the shared ontology and the agent schema graph, where predicate and
+   * class labels live. Never includes another user's graph.
+   */
+  private labelGraphsFor(agentId: string, userId?: string): string[] {
+    return [
+      ...this.knowledgeGraphsFor(agentId, userId),
+      TBOX_GRAPH,
+      GraphUriResolver.getSchemaGraph(agentId),
+    ];
+  }
+
   /** Build a SPARQL `VALUES ?var { <g1> <g2> … }` clause over graph URIs. */
   private graphValuesClause(graphs: string[], varName = '?g'): string {
     return `VALUES ${varName} { ${graphs.map((g) => `<${g}>`).join(' ')} }`;
@@ -504,14 +541,18 @@ export class KnowledgeEngine {
    * Returns a formatted string ready for system prompt injection.
    *
    * Reads across the agent's real knowledge graphs (see `knowledgeGraphsFor`),
-   * not the dead `:abox` graph (#986). Labels are resolved across ANY named
-   * graph (`GRAPH ?lg`) because predicate labels live in the schema/TBox graph
-   * while entity labels live in the fact graph — and the embedded Oxigraph
-   * store has an empty default graph, so an un-scoped label join matches
-   * nothing.
+   * not the dead `:abox` graph. Labels are resolved in the knowledge
+   * graphs plus the shared ontology and the schema graph (see `labelGraphsFor`)
+   * because predicate labels live in the schema/TBox graph while entity labels
+   * live in the fact graph — and the embedded Oxigraph store has an empty
+   * default graph, so an un-scoped label join matches nothing. Another user's
+   * graph is never consulted for labels.
    */
   async getFactsAbout(entities: string[], agentId: string, limit = 20, userId?: string): Promise<string> {
     const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId, userId), '?g');
+    const labelGraphs = this.labelGraphsFor(agentId, userId);
+    const plg = this.graphValuesClause(labelGraphs, '?plg');
+    const olg = this.graphValuesClause(labelGraphs, '?olg');
     const facts: string[] = [];
 
     for (const entity of entities) {
@@ -533,8 +574,8 @@ export class KnowledgeEngine {
               BIND("in" AS ?direction)
               FILTER(?pred != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
             }
-            OPTIONAL { GRAPH ?plg { ?pred rdfs:label ?predLabel } }
-            OPTIONAL { GRAPH ?olg { ?other rdfs:label ?otherLabel } }
+            OPTIONAL { ${plg} GRAPH ?plg { ?pred rdfs:label ?predLabel } }
+            OPTIONAL { ${olg} GRAPH ?olg { ?other rdfs:label ?otherLabel } }
           }
           LIMIT ${limit - facts.length}
         `;
@@ -566,11 +607,15 @@ export class KnowledgeEngine {
    * entity. This gives the agent persistent memory across all sessions.
    *
    * Reads the worldview graph (+ the current user's graph when `userId` is
-   * given) — not the dead `:abox` graph (#986). Labels are resolved across any
-   * named graph because the embedded Oxigraph store has an empty default graph.
+   * given) — not the dead `:abox` graph. Labels are resolved in those
+   * graphs plus the shared ontology and schema graph (never another user's).
    */
   async getRecentFacts(agentId: string, limit = 30, userId?: string): Promise<string> {
     const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId, userId), '?g');
+    const labelGraphs = this.labelGraphsFor(agentId, userId);
+    const slg = this.graphValuesClause(labelGraphs, '?slg');
+    const plg = this.graphValuesClause(labelGraphs, '?plg');
+    const olg = this.graphValuesClause(labelGraphs, '?olg');
 
     try {
       const query = `
@@ -581,9 +626,9 @@ export class KnowledgeEngine {
         SELECT ?s ?sLabel ?p ?pLabel ?o ?oLabel WHERE {
           ${valuesG}
           GRAPH ?g { ?s ?p ?o . }
-          OPTIONAL { GRAPH ?slg { ?s rdfs:label ?sLabel } }
-          OPTIONAL { GRAPH ?plg { ?p rdfs:label ?pLabel } }
-          OPTIONAL { GRAPH ?olg { ?o rdfs:label ?oLabel } }
+          OPTIONAL { ${slg} GRAPH ?slg { ?s rdfs:label ?sLabel } }
+          OPTIONAL { ${plg} GRAPH ?plg { ?p rdfs:label ?pLabel } }
+          OPTIONAL { ${olg} GRAPH ?olg { ?o rdfs:label ?oLabel } }
           FILTER(?p != rdf:type)
           FILTER(?p != rdfs:label)
           FILTER(?p != rdfs:domain)
@@ -643,16 +688,18 @@ export class KnowledgeEngine {
 
     try {
       // Check the graph the fact would actually be written to; if no context
-      // is available, fall back to a graph-agnostic match so duplicates are
-      // still caught wherever the triple lives.
+      // is available, fall back to a match in the agent worldview.
       if (context) {
         const targetGraph = this.resolveTargetGraph(fact, context);
         return await this.triplestore.ask(
           `ASK { GRAPH <${targetGraph}> { <${subjectUri}> <${predicateUri}> ${objectClause} } }`
         );
       }
+      // No user is known here, so only the worldview is searched — never the
+      // private graph of any user.
+      const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId), '?g');
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { <${subjectUri}> <${predicateUri}> ${objectClause} } }`
+        `ASK { ${valuesG} GRAPH ?g { <${subjectUri}> <${predicateUri}> ${objectClause} } }`
       );
     } catch {
       return false;
@@ -967,10 +1014,14 @@ export class KnowledgeEngine {
    * a new value supersedes any existing value. Non-functional properties
    * (the default in OWL) are multi-valued: multiple values coexist.
    */
-  private async isFunctionalProperty(predicateUri: string): Promise<boolean> {
+  private async isFunctionalProperty(predicateUri: string, agentId: string): Promise<boolean> {
+    const valuesG = this.graphValuesClause(
+      [TBOX_GRAPH, GraphUriResolver.getSchemaGraph(agentId)],
+      '?g',
+    );
     try {
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { <${predicateUri}> a <${OWL_FUNCTIONAL_PROPERTY}> } }`
+        `ASK { ${valuesG} GRAPH ?g { <${predicateUri}> a <${OWL_FUNCTIONAL_PROPERTY}> } }`
       );
     } catch {
       // Conservative default: treat as non-functional (multi-valued)
@@ -1136,7 +1187,8 @@ export class KnowledgeEngine {
     // we always pin the subject explicitly and the dedup key matches the write
     // key for every subject class (incl. a `self`-alias subject).
     const subjectCanonical = this.canonicalSubjectUri(fact, context);
-    const subject = await this.resolveEntity(fact.subject, fact.subjectType, targetGraph, subjectCanonical);
+    const scope = { agentId: context.agentId, userId: context.userId };
+    const subject = await this.resolveEntity(fact.subject, fact.subjectType, targetGraph, subjectCanonical, scope);
     if (subject.isNew) newEntities.push(subject.uri);
 
     // 2. Resolve property. A predicate that is new is registered in the
@@ -1153,7 +1205,7 @@ export class KnowledgeEngine {
       objectUri = fact.object;
       objectTriple = `"${this.escapeLiteral(fact.object)}"`;
     } else {
-    const obj = await this.resolveEntity(fact.object, fact.objectType, targetGraph);
+    const obj = await this.resolveEntity(fact.object, fact.objectType, targetGraph, undefined, scope);
     if (obj.isNew) newEntities.push(obj.uri);
     objectUri = obj.uri;
     objectTriple = `<${obj.uri}>`;
@@ -1178,7 +1230,7 @@ export class KnowledgeEngine {
     // or there is a genuine logical contradiction. Multi-valued / time-
     // scopeable properties (worksAt, hasRole, memberOf, …) preserve all
     // values instead of collapsing to the last-ingested one. (#875)
-    const functional = await this.isFunctionalProperty(predicate.uri);
+    const functional = await this.isFunctionalProperty(predicate.uri, context.agentId);
     if (functional) {
       const conflicting = await this.findConflictingClaims(
         subject.uri, predicate.uri, objectTriple, context.agentId,

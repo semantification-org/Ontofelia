@@ -1,5 +1,5 @@
 import { TriplestoreAdapter } from '@ontofelia/core';
-import { GraphUriResolver } from '../utils/GraphUriResolver.js';
+import { GraphUriResolver, SHARED_GRAPHS } from '../utils/GraphUriResolver.js';
 
 export interface ReasoningConflict {
   type: 'disjoint_violation' | 'inconsistency' | 'range_violation' | 'domain_violation' | 'claim_clash';
@@ -14,7 +14,11 @@ export class ConflictDetector {
   constructor(private triplestore: TriplestoreAdapter) {}
 
   /**
-   * Detect conflicts across all named graphs.
+   * Detect conflicts in the agent's worldview and — when `userId` is given —
+   * that user's own graph. Class/property declarations (TBox) are read from the
+   * shared ontology and the agent schema graph. Without a `userId` only the
+   * worldview is checked: a user's private graph is never scanned on behalf of
+   * somebody else.
    *
    * Three classes of conflict are surfaced:
    *  - **disjoint_violation** — a single entity belongs to two OWL-disjoint
@@ -27,14 +31,20 @@ export class ConflictDetector {
    *    and is critical for the conflicts graph to ever populate during
    *    normal use. Before this method existed, the conflicts graph was dead.
    */
-  async detectConflicts(agentId: string): Promise<ReasoningConflict[]> {
+  async detectConflicts(agentId: string, userId?: string): Promise<ReasoningConflict[]> {
     const conflicts: ReasoningConflict[] = [];
+    const values = (v: string, graphs: string[]) => `VALUES ${v} { ${graphs.map((g) => `<${g}>`).join(' ')} }`;
+    const aboxGraphs = [GraphUriResolver.getWorldviewGraph(agentId)];
+    if (userId) aboxGraphs.push(GraphUriResolver.getUserGraph(agentId, userId));
+    const tboxGraphs = [SHARED_GRAPHS.ONTOLOGY, GraphUriResolver.getSchemaGraph(agentId)];
 
     // 1. Disjoint-class violations
     try {
       const disjointQuery = `
         PREFIX owl: <http://www.w3.org/2002/07/owl#>
         SELECT DISTINCT ?s ?c1 ?c2 WHERE {
+          ${values('?g', aboxGraphs)}
+          ${values('?tbox', tboxGraphs)}
           GRAPH ?g { ?s a ?c1 ; a ?c2 . }
           GRAPH ?tbox { ?c1 owl:disjointWith ?c2 . }
           FILTER (?c1 != ?c2)
@@ -60,10 +70,12 @@ export class ConflictDetector {
       const rangeQuery = `
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?s ?p ?o ?r WHERE {
+          ${values('?g', aboxGraphs)}
+          ${values('?tg', tboxGraphs)}
           GRAPH ?g  { ?s ?p ?o . }
           GRAPH ?tg { ?p rdfs:range ?r . }
           FILTER (isIRI(?o))
-          FILTER NOT EXISTS { GRAPH ?og { ?o a ?r } }
+          FILTER NOT EXISTS { ${values('?og', [...aboxGraphs, ...tboxGraphs])} GRAPH ?og { ?o a ?r } }
         } LIMIT 100
       `;
       const res = await this.triplestore.query(rangeQuery);
