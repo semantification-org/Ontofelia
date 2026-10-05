@@ -310,9 +310,11 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
       await fs.promises.rename(tmpPath, backupPath);
       const backupBytes = (await fs.promises.stat(backupPath)).size;
 
-      if (tripleCount !== null && tripleCount > 0 && turtle.trim().length === 0) {
+      if (turtle.trim().length === 0 && tripleCount !== 0) {
         await fs.promises.rm(backupPath, { force: true });
-        const message = `backup is empty although the store holds ${tripleCount} triples — nothing deleted`;
+        const message = tripleCount === null
+          ? 'backup is empty and the store size could not be verified — nothing deleted'
+          : `backup is empty although the store holds ${tripleCount} triples — nothing deleted`;
         logger.error(message);
         return reply.code(500).send({ error: message });
       }

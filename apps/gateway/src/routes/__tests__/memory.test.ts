@@ -174,3 +174,47 @@ describe('Memory Routes: empty backup guard', () => {
     expect(leftovers).toEqual([]);
   });
 });
+
+describe('Memory Routes: unverifiable store size guard', () => {
+  let fastify: FastifyInstance;
+  let home: { restore: () => void };
+  let adapter: ReturnType<typeof captureAdapter>;
+
+  beforeAll(async () => {
+    home = useIsolatedHome();
+    adapter = captureAdapter();
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for('ontofelia-gateway-started')];
+    const config = getDefaultConfig();
+    config.gateway.token = 'test-secret';
+    config.gateway.port = 0;
+    config.memory.backend = 'memory';
+    fastify = await startGateway(config);
+    adapter.release();
+  });
+
+  afterAll(async () => {
+    vi.restoreAllMocks();
+    await fastify.close();
+    home.restore();
+  });
+
+  it('refuses to drop when the count query fails and the backup is empty', async () => {
+    const store = adapter.get();
+    await store.insertTriples(GRAPH, [{ subject: SUBJECT, predicate: 'urn:test:says', object: { value: MARKER } }]);
+    const before = await tripleCount(store);
+    expect(before).toBeGreaterThan(0);
+    vi.spyOn(store, 'query').mockRejectedValue(new Error('query unavailable'));
+    vi.spyOn(store, 'exportDataset').mockResolvedValue('');
+
+    const res = await fastify.inject({ method: 'DELETE', url: '/api/knowledge?confirm=true', headers: { authorization: 'Bearer test-secret' } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('backup is empty and the store size could not be verified — nothing deleted');
+    expect(res.json().deleted).toBeUndefined();
+
+    vi.restoreAllMocks();
+    expect(await tripleCount(store)).toBe(before);
+    const backupDir = path.join(process.env.HOME!, '.ontofelia', 'backups');
+    const leftovers = fs.existsSync(backupDir) ? fs.readdirSync(backupDir).filter((f) => f.startsWith('knowledge-')) : [];
+    expect(leftovers).toEqual([]);
+  });
+});
