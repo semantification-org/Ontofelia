@@ -22,7 +22,8 @@ export class MemorySparqlTool implements ToolDefinition {
           '<urn:ontofelia:worldview> = validated world knowledge; ' +
           '<urn:ontofelia:claims> = claim provenance; ' +
           '<urn:ontofelia:evidence> = source evidence; ' +
-          '<urn:ontofelia:inferred> = reasoner-materialized triples. ' +
+          '<urn:ontofelia:inferred> = reasoner-materialized triples derived from the worldview; ' +
+          '<urn:ontofelia:inferred:user:USERID> = triples derived from one user\'s private graph. ' +
           'Entity URIs follow the pattern <urn:ontofelia:entity:Name>. ' +
           'Only query these registered graphs — do not invent new graph URIs.'
       }

@@ -92,6 +92,50 @@ export class GraphUriResolver {
   }
 
   /**
+   * Per-user reasoner target — holds the triples inferred from one user's
+   * private graph. Deliberately NOT under `urn:<agent>:user:` so that nothing
+   * that treats that prefix as "a user graph" picks it up by accident.
+   */
+  static getUserInferredGraph(agentId: string, userId: string): string {
+    return `urn:${agentId}:inferred:user:${userId}`;
+  }
+
+  /**
+   * The inferred graphs a given user may read: the shared one (derived from
+   * the worldview only) plus that user's own. Never another user's.
+   */
+  static getReadableInferredGraphs(agentId: string, userId?: string): string[] {
+    const graphs = [GraphUriResolver.getInferredGraph(agentId)];
+    if (userId) graphs.push(GraphUriResolver.getUserInferredGraph(agentId, userId));
+    return graphs;
+  }
+
+  /**
+   * Where derivations from a fact stored in `sourceGraph` belong, and which
+   * graphs they are computed from. A fact in a user's private graph is
+   * reasoned over together with the worldview and lands in that user's own
+   * inferred graph; a worldview fact is reasoned over the worldview alone and
+   * lands in the shared inferred graph.
+   */
+  static getInferenceScope(
+    agentId: string,
+    sourceGraph: string,
+  ): { inferredGraph: string; aboxGraphs: string[] } {
+    const userPrefix = `urn:${agentId}:user:`;
+    if (sourceGraph.startsWith(userPrefix) && sourceGraph.length > userPrefix.length) {
+      const userId = sourceGraph.slice(userPrefix.length);
+      return {
+        inferredGraph: GraphUriResolver.getUserInferredGraph(agentId, userId),
+        aboxGraphs: [GraphUriResolver.getWorldviewGraph(agentId), sourceGraph],
+      };
+    }
+    return {
+      inferredGraph: GraphUriResolver.getInferredGraph(agentId),
+      aboxGraphs: [sourceGraph],
+    };
+  }
+
+  /**
    * Konversationskontext (kurzlebig)
    */
   static getSessionGraph(agentId: string, sessionId: string): string {

@@ -29,6 +29,10 @@ function describeKnownGraph(uri: string): { role: string; agentId: string | null
     return { role: agentRole[0], agentId: PRIMARY_AGENT_ID, shared: false };
   }
 
+  if (uri.startsWith(`urn:${PRIMARY_AGENT_ID}:inferred:user:`)) {
+    return { role: 'inferred_user', agentId: PRIMARY_AGENT_ID, shared: false };
+  }
+
   if (uri.startsWith(`urn:${PRIMARY_AGENT_ID}:user:`)) {
     return { role: 'user', agentId: PRIMARY_AGENT_ID, shared: false };
   }

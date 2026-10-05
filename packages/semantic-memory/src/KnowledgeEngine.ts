@@ -501,15 +501,14 @@ export class KnowledgeEngine {
    * Only the current user's graph is ever included — never all users — so the
    * per-user isolation guarantee (#869) holds.
    *
-   * Two graphs are deliberately EXCLUDED:
+   * Deliberately EXCLUDED:
    *   - `:self` (identity) — surfaced separately by `getSystemPromptContext()`;
    *     including it here would duplicate the agent's identity into the
    *     "world knowledge" recall.
-   *   - `:inferred` — a single, agent-global graph into which on-write
-   *     materialisation writes every user's inferred triples. It is NOT
-   *     user-scoped, so reading it inside a per-user recall would leak one
-   *     user's (inferred) facts to another (#869). Surfacing multi-hop
-   *     inferences in recall needs a per-user inferred graph first.
+   *   - The inferred graphs. The shared `:inferred` graph now holds only
+   *     worldview derivations and `:inferred:user:<id>` only that user's, so
+   *     reading `GraphUriResolver.getReadableInferredGraphs(agent, user)` is
+   *     safe, but recall does not surface inferences yet.
    */
   private knowledgeGraphsFor(agentId: string, userId?: string): string[] {
     const graphs = [GraphUriResolver.getWorldviewGraph(agentId)];
@@ -899,6 +898,95 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Recompute the inferred graph that belongs to `sourceGraph` (the worldview
+   * or one user's graph) from scratch: reason over its current triples (plus
+   * the worldview for a user graph) and replace that inferred graph with the
+   * result. The result is computed BEFORE the old graph is cleared, and a
+   * reasoner failure throws without touching anything.
+   *
+   * Used after a retraction (stale derivations must not survive) and by
+   * `rebuildInferredGraphs`. Returns the number of derived triples written.
+   */
+  async rebuildInferredGraphFor(agentId: string, sourceGraph: string): Promise<number> {
+    if (!this.reasoner) return 0;
+    const scope = GraphUriResolver.getInferenceScope(agentId, sourceGraph);
+    const inferredGraph = this.assertGraph(scope.inferredGraph);
+    const own = await this.readGraphTriples(sourceGraph);
+    // Everything in the scope but the source graph itself is context; the
+    // source graph's triples play the role of "the new facts".
+    const context = scope.aboxGraphs.filter(g => g !== sourceGraph);
+    const derived = (await this.reasoner.materialize(own, context, { strict: true }))
+      .filter(t => !KnowledgeEngine.isReasonerBuiltin(t));
+    await this.triplestore.update(`CLEAR SILENT GRAPH <${inferredGraph}>`);
+    if (derived.length > 0) await this.triplestore.insertTriples(inferredGraph, derived);
+    return derived.length;
+  }
+
+  /**
+   * One-shot repair for deployments whose shared inferred graph mixes
+   * derivations from every user's private graph: clear the shared graph and
+   * every per-user inferred graph, then recompute the shared one from the
+   * worldview and each user's own from worldview + that user's graph.
+   * Never runs automatically.
+   */
+  async rebuildInferredGraphs(agentId: string): Promise<{ shared: number; perUser: Record<string, number> }> {
+    const userPrefix = `urn:${agentId}:user:`;
+    const res = await this.triplestore.query(
+      `SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } }`,
+    );
+    const graphs = res.type === 'bindings' && res.bindings
+      ? res.bindings.map(b => b.g?.value).filter((g): g is string => !!g)
+      : [];
+    // Stale per-user inferred graphs whose user graph is gone must be cleared too.
+    const inferredUserPrefix = `urn:${agentId}:inferred:user:`;
+    const userGraphs = graphs.filter(g => g.startsWith(userPrefix));
+    const orphans = graphs.filter(
+      g => g.startsWith(inferredUserPrefix)
+        && !userGraphs.includes(`${userPrefix}${g.slice(inferredUserPrefix.length)}`),
+    );
+    const shared = await this.rebuildInferredGraphFor(agentId, GraphUriResolver.getWorldviewGraph(agentId));
+    const perUser: Record<string, number> = {};
+    for (const g of userGraphs) {
+      perUser[g.slice(userPrefix.length)] = await this.rebuildInferredGraphFor(agentId, g);
+    }
+    for (const g of orphans) await this.triplestore.update(`CLEAR SILENT GRAPH <${g}>`);
+    return { shared, perUser };
+  }
+
+  /** Reasoner built-ins (owl:Thing / owl:Nothing bookkeeping) are not derivations worth storing. */
+  private static isReasonerBuiltin(t: { subject: string; predicate: string; object: unknown }): boolean {
+    const OWL = 'http://www.w3.org/2002/07/owl#';
+    return t.subject === `${OWL}Thing` || t.subject === `${OWL}Nothing`
+      || (t.predicate === 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+        && typeof t.object === 'object' && t.object !== null
+        && (t.object as { value?: string }).value === `${OWL}Thing`);
+  }
+
+  /** All blank-node-free triples of a graph, as reasoner input. */
+  private async readGraphTriples(graph: string): Promise<Array<{
+    subject: string; predicate: string;
+    object: { type: 'uri'; value: string } | { type: 'literal'; value: string; language?: string };
+  }>> {
+    const res = await this.triplestore.query(
+      `SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`,
+    );
+    if (res.type !== 'bindings' || !res.bindings) return [];
+    const out = [];
+    for (const b of res.bindings) {
+      const s = b.s, p = b.p, o = b.o;
+      if (!s || !p || !o || s.type !== 'uri' || o.type === 'bnode') continue;
+      out.push({
+        subject: s.value,
+        predicate: p.value,
+        object: o.type === 'uri'
+          ? { type: 'uri' as const, value: o.value }
+          : { type: 'literal' as const, value: o.value, ...(o.language ? { language: o.language } : {}) },
+      });
+    }
+    return out;
+  }
+
+  /**
    * Route a fact to its correct Named Graph per the knowledge-graph concept.
    *
    * Important: urn:<agent>:self is WRITE-PROTECTED (concept §2 — "nur durch
@@ -1103,9 +1191,10 @@ export class KnowledgeEngine {
           };
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const stale = await this.reasoner.materialize([retired as any], claim.assertedInGraph);
+            const scope = GraphUriResolver.getInferenceScope(agentId, claim.assertedInGraph);
+            const stale = await this.reasoner.materialize([retired as any], scope.aboxGraphs);
             if (stale.length > 0) {
-              const inferredGraph = GraphUriResolver.getInferredGraph(agentId);
+              const inferredGraph = scope.inferredGraph;
               const lines = stale.map(t => {
                 const subj = `<${t.subject}>`;
                 const pred = `<${t.predicate}>`;
@@ -1266,7 +1355,12 @@ export class KnowledgeEngine {
     };
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      inferredTriples = await this.reasoner.materialize([inputTriple as any], targetGraph);
+      // A private fact is reasoned over worldview + that user's graph; a
+      // worldview fact over the worldview alone (see getInferenceScope).
+      inferredTriples = await this.reasoner.materialize(
+        [inputTriple as any],
+        GraphUriResolver.getInferenceScope(context.agentId, targetGraph).aboxGraphs,
+      );
     } catch {
       // Reasoning is best-effort — never block ingestion if the reasoner trips.
     }
@@ -1329,10 +1423,11 @@ export class KnowledgeEngine {
     }
   }
 
-  // 4c. Persist materialized inferences into urn:<agent>:inferred.
+  // 4c. Persist materialized inferences. Derivations from a user's private
+  // graph go to that user's own inferred graph, never the shared one.
   if (status === 'accepted' && inferredTriples.length > 0) {
     const inferredGraph = this.assertGraph(
-      GraphUriResolver.getInferredGraph(context.agentId),
+      GraphUriResolver.getInferenceScope(context.agentId, targetGraph).inferredGraph,
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await this.triplestore.insertTriples(inferredGraph, inferredTriples as any);

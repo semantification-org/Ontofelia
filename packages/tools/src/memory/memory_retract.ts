@@ -1,6 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult, ToolPermission, ToolCategory } from '@ontofelia/core';
 import { TriplestoreAdapter } from '@ontofelia/core';
-import { GraphUriResolver, GraphRegistry, GraphPolicyError } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, GraphRegistry, GraphPolicyError, KnowledgeEngine } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -122,6 +122,22 @@ export class MemoryRetractTool implements ToolDefinition {
       await this.triplestore.update(deleteProvenance);
     } catch (e) {
       return this.fail(args, startTime, (e as Error).message);
+    }
+
+    // Derivations of the removed fact must not outlive it: recompute the
+    // inferred graph that belongs to the target graph. If the recompute
+    // cannot run, drop that inferred graph instead — a missing derivation is
+    // acceptable, a stale one (possibly of private data) is not.
+    try {
+      await new KnowledgeEngine(this.triplestore, undefined, this.registry)
+        .rebuildInferredGraphFor(context.agentId, targetGraph);
+    } catch {
+      try {
+        const { inferredGraph } = GraphUriResolver.getInferenceScope(context.agentId, targetGraph);
+        await this.triplestore.update(`CLEAR SILENT GRAPH <${inferredGraph}>`);
+      } catch {
+        // Best effort: the fact itself is already gone.
+      }
     }
 
     return {

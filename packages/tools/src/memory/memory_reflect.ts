@@ -15,7 +15,7 @@ export class MemoryReflectTool implements ToolDefinition {
       includeInferred: {
         type: 'boolean',
         default: true,
-        description: 'Currently has no effect: inferred triples live in one agent-wide graph that mixes all users, so they are never returned until inference is kept per user.'
+        description: 'Currently has no effect: inferred triples are never returned here, because deployments that predate per-user inference may still hold mixed derivations in the shared inferred graph until it is rebuilt.'
       }
     }
   };
@@ -27,8 +27,9 @@ export class MemoryReflectTool implements ToolDefinition {
     const startTime = Date.now();
     const args = input as { hoursBack?: number; includeInferred?: boolean };
     // Readable graphs: the agent worldview and the acting user's own graph.
-    // The agent-wide inferred graph mixes every user's inferences and is
-    // therefore never read here, whatever `includeInferred` says.
+    // Inferred graphs are not read here, whatever `includeInferred` says: a
+    // deployment that predates per-user inference may still carry mixed
+    // derivations in the shared graph until `rebuildInferredGraphs` has run.
     const graphs = [GraphUriResolver.getWorldviewGraph(context.agentId)];
     if (context.senderId) graphs.push(GraphUriResolver.getUserGraph(context.agentId, context.senderId));
 
