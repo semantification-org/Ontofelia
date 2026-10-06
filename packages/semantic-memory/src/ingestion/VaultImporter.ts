@@ -88,6 +88,11 @@ async function walk(realRoot: string): Promise<Candidate[]> {
   return out.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 
+/** A validator message for a report: control characters dropped, length capped. */
+function safeMessage(msg: string): string {
+  return msg.replace(/[^\x20-\x7e]/g, '?').slice(0, 160);
+}
+
 function splitFrontmatter(text: string): { yamlSrc: string; body: string } | { error: string } {
   const lines = text.replace(/^﻿/, '').split('\n');
   if ((lines[0] ?? '').replace(/\r$/, '') !== '---') return { error: 'no frontmatter' };
@@ -158,7 +163,22 @@ export async function importVault(engine: KnowledgeEngine, opts: VaultImportOpti
     if (mapping.refused) { refuse(mapping.refused); continue; }
     if (mapping.facts.length === 0) { refuse('no facts'); continue; }
 
-    const previews = await engine.previewFacts(mapping.facts, ctx);
+    // Validate every fact of the note before the first write: previewFacts
+    // is read-only and runs the engine's term validators. A rejected term
+    // refuses this note only; any other error is a genuine failure and throws.
+    const previews: Awaited<ReturnType<KnowledgeEngine['previewFacts']>> = [];
+    let invalid: string | undefined;
+    for (const f of mapping.facts) {
+      try {
+        previews.push(...await engine.previewFacts([f], ctx));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (!/^Invalid /.test(msg)) throw err;
+        invalid = `invalid value for ${JSON.stringify(f.predicate.slice(0, 64))}: ${safeMessage(msg)}`;
+        break;
+      }
+    }
+    if (invalid !== undefined) { refuse(invalid); continue; }
     const sources = await engine.claimSourceUris(
       opts.agentId, [...new Set(previews.flatMap(p => p.wouldSupersede))],
     );
