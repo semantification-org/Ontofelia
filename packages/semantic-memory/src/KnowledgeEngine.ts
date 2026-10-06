@@ -2,7 +2,7 @@ import { TriplestoreAdapter, TriplestoreConfig } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
-import { ClaimProvenanceService } from './provenance/ClaimProvenanceService.js';
+import { ClaimProvenanceService, assertValidEvidenceSourceUri } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
 import { FactInput, FactContext, StoreResult } from './types.js';
@@ -1248,6 +1248,9 @@ export class KnowledgeEngine {
    * Skips storage if the exact triple already exists (duplicate detection).
    */
   async storeFact(fact: FactInput, context: FactContext): Promise<StoreResult> {
+    // A hostile sourceUri is rejected before any write (it becomes an IRI in the evidence).
+    if (fact.sourceUri) assertValidEvidenceSourceUri(fact.sourceUri);
+
     // Duplicate check — skip if triple already exists
     if (await this.isDuplicate(fact, context.agentId, context)) {
       return {
@@ -1447,10 +1450,12 @@ export class KnowledgeEngine {
     let evidenceUri: string | undefined;
     let evidenceGraph: string | undefined;
 
-    // Create Evidence if we have source text or message ID
-    if (fact.sourceSpan || fact.sourceMessageId) {
+    // Create Evidence if we have source text, a message ID or a source URI
+    if (fact.sourceSpan || fact.sourceMessageId || fact.sourceUri) {
       const evidence = await this.claimService.createEvidence(context.agentId, {
-        evidenceType: 'message-span',
+        evidenceType: fact.evidenceType ?? 'message-span',
+        sourceUri: fact.sourceUri,
+        contentHash: fact.contentHash,
         sourceMessageId: fact.sourceMessageId,
         sessionId: context.sessionId,
         channel: fact.channel,

@@ -1,3 +1,6 @@
+/** Kind of source an Evidence object records. */
+export type EvidenceType = 'message-span' | 'tool-result' | 'document' | 'web-source' | 'manual-review';
+
 export interface FactInput {
   subject: string;
   subjectType?: string; // Person, Organization, Place, Concept, Event
@@ -12,6 +15,10 @@ export interface FactInput {
   sourceMessageId?: string;
   sourceSpan?: string;
   sourceUri?: string;
+  /** Kind of evidence to record; defaults to 'message-span' when omitted. */
+  evidenceType?: EvidenceType;
+  /** Content hash of the source (e.g. 'sha256:<hex>'), stored on the evidence. */
+  contentHash?: string;
   channel?: string;
   status?: 'accepted' | 'rejected' | 'superseded';
 }

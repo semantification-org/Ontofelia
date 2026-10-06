@@ -1,10 +1,10 @@
 import { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
-import { FactInput, FactContext } from '../types.js';
+import { FactInput, FactContext, EvidenceType } from '../types.js';
 
 export interface EvidenceInput {
-  evidenceType: 'message-span' | 'tool-result' | 'document' | 'web-source' | 'manual-review';
+  evidenceType: EvidenceType;
   sourceMessageId?: string;
   sessionId?: string;
   channel?: string;
@@ -12,6 +12,16 @@ export interface EvidenceInput {
   rawText?: string;
   sourceUri?: string;
   contentHash?: string;
+}
+
+/**
+ * sourceUri is written as an IRI (<...>): reject anything that could close it
+ * or inject triples. Throws before any write.
+ */
+export function assertValidEvidenceSourceUri(sourceUri: string): void {
+  if (/[\u0000-\u0020<>"{}|\\^`]/.test(sourceUri)) {
+    throw new Error('Invalid sourceUri for evidence: contains characters not allowed in an IRI');
+  }
 }
 
 export class ClaimProvenanceService {
@@ -53,10 +63,16 @@ export class ClaimProvenanceService {
       triples += `\n<${uri}> <urn:shared:ontology#rawText> "${escapedText}" .`;
     }
     if (input.sourceUri) {
+      assertValidEvidenceSourceUri(input.sourceUri);
       triples += `\n<${uri}> <urn:shared:ontology#sourceUri> <${input.sourceUri}> .`;
     }
     if (input.contentHash) {
-      triples += `\n<${uri}> <urn:shared:ontology#contentHash> "${input.contentHash}" .`;
+      const escapedHash = input.contentHash
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+      triples += `\n<${uri}> <urn:shared:ontology#contentHash> "${escapedHash}" .`;
     }
 
     const sparql = `
