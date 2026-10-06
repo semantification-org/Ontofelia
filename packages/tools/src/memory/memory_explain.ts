@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
-import { GraphUriResolver } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, sparqlIri } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -38,9 +38,16 @@ export class MemoryExplainTool implements ToolDefinition {
     const start = Date.now();
 
     const entityUri = this.toEntityUri(data.entity);
+    let entityIri: string;
+    let claimsGraphIri: string;
+    try {
+      entityIri = sparqlIri(entityUri);
+      claimsGraphIri = sparqlIri(GraphUriResolver.getClaimsGraph(context.agentId));
+    } catch (e) {
+      return this.fail(data, start, (e as Error).message);
+    }
     // Provenance is modelled as core:Claim objects in the claims graph; the
     // raw source text lives in the evidence graph (linked via hasEvidence).
-    const claimsGraph = GraphUriResolver.getClaimsGraph(context.agentId);
 
     const sparql = `
       PREFIX claim: <${CLAIM_NS}>
@@ -48,9 +55,9 @@ export class MemoryExplainTool implements ToolDefinition {
       SELECT ?predicate ?predicateLabel ?object ?status ?confidence ?confidenceLabel
              ?sourceKind ?learnedAt ?sourceSpan ?evidence ?evidenceGraph
       WHERE {
-        GRAPH <${claimsGraph}> {
+        GRAPH ${claimsGraphIri} {
           ?claim a claim:Claim ;
-                 claim:claimSubject   <${entityUri}> ;
+                 claim:claimSubject   ${entityIri} ;
                  claim:claimPredicate ?predicate ;
                  claim:claimObject    ?object ;
                  claim:status         ?status .
@@ -117,5 +124,23 @@ export class MemoryExplainTool implements ToolDefinition {
         }
       };
     }
+  }
+
+  private fail(input: unknown, start: number, error: string): ToolResult {
+    return {
+      success: false,
+      output: null,
+      error,
+      auditEntry: {
+        toolName: this.name,
+        timestamp: new Date().toISOString(),
+        duration: Date.now() - start,
+        input,
+        output: null,
+        success: false,
+        error,
+        permissions: [...this.permissions]
+      }
+    };
   }
 }

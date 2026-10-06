@@ -1,6 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult, ToolPermission, ToolCategory } from '@ontofelia/core';
 import { TriplestoreAdapter } from '@ontofelia/core';
-import { GraphUriResolver, GraphRegistry, GraphPolicyError } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, GraphRegistry, GraphPolicyError, sparqlIri, sparqlStringLiteral } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -63,24 +63,38 @@ export class MemoryRetractTool implements ToolDefinition {
       throw e;
     }
 
-    const claimsGraph = GraphUriResolver.getClaimsGraph(context.agentId);
-    const evidenceGraph = GraphUriResolver.getEvidenceGraph(context.agentId);
-
+    // Every value that reaches the query text is validated (IRIs) or escaped
+    // (literals). These arguments come from the model, so an invalid value is
+    // a normal tool failure, never a query.
+    let targetGraphIri: string;
+    let claimsGraphIri: string;
+    let evidenceGraphIri: string;
+    let subjectIri: string;
+    let predicateIri: string;
     let objectPart = '?o';
-    if (args.object) {
-      if (args.object.startsWith('http://') || args.object.startsWith('https://') || args.object.startsWith('urn:')) {
-        objectPart = `<${args.object}>`;
-      } else {
-        objectPart = `"${args.object.replace(/"/g, '\\"')}"`;
+    try {
+      targetGraphIri = sparqlIri(targetGraph);
+      claimsGraphIri = sparqlIri(GraphUriResolver.getClaimsGraph(context.agentId));
+      evidenceGraphIri = sparqlIri(GraphUriResolver.getEvidenceGraph(context.agentId));
+      subjectIri = sparqlIri(args.subject);
+      predicateIri = sparqlIri(args.predicate);
+      if (args.object) {
+        if (args.object.startsWith('http://') || args.object.startsWith('https://') || args.object.startsWith('urn:')) {
+          objectPart = sparqlIri(args.object);
+        } else {
+          objectPart = sparqlStringLiteral(args.object);
+        }
       }
+    } catch (e) {
+      return this.fail(args, startTime, (e as Error).message);
     }
 
     // 1. Delete the base triple from the target graph.
     const deleteTriple = `
       DELETE {
-        GRAPH <${targetGraph}> { <${args.subject}> <${args.predicate}> ${objectPart} . }
+        GRAPH ${targetGraphIri} { ${subjectIri} ${predicateIri} ${objectPart} . }
       } WHERE {
-        GRAPH <${targetGraph}> { <${args.subject}> <${args.predicate}> ${objectPart} . }
+        GRAPH ${targetGraphIri} { ${subjectIri} ${predicateIri} ${objectPart} . }
       }`;
 
     // 2. Hard-delete the matching core:Claim objects AND their core:Evidence,
@@ -89,18 +103,18 @@ export class MemoryRetractTool implements ToolDefinition {
     const deleteProvenance = `
       PREFIX claim: <${CLAIM_NS}>
       DELETE {
-        GRAPH <${claimsGraph}>   { ?claim ?cp ?co . }
-        GRAPH <${evidenceGraph}> { ?evidence ?ep ?eo . }
+        GRAPH ${claimsGraphIri}   { ?claim ?cp ?co . }
+        GRAPH ${evidenceGraphIri} { ?evidence ?ep ?eo . }
       } WHERE {
-        GRAPH <${claimsGraph}> {
+        GRAPH ${claimsGraphIri} {
           ?claim a claim:Claim ;
-                 claim:claimSubject   <${args.subject}> ;
-                 claim:claimPredicate <${args.predicate}> ;
+                 claim:claimSubject   ${subjectIri} ;
+                 claim:claimPredicate ${predicateIri} ;
                  ${objectFilter}
                  ?cp ?co .
           OPTIONAL { ?claim claim:hasEvidence ?evidence . }
         }
-        OPTIONAL { GRAPH <${evidenceGraph}> { ?evidence ?ep ?eo . } }
+        OPTIONAL { GRAPH ${evidenceGraphIri} { ?evidence ?ep ?eo . } }
       }`;
 
     try {

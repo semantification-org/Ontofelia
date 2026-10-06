@@ -1,6 +1,8 @@
 import { Triple } from '@ontofelia/core';
 import { inferTriples } from '@ontofelia/reasoner';
 import { TriplestoreAdapter } from '@ontofelia/core';
+import { sparqlIri, sparqlStringLiteral } from '../utils/SparqlSyntax.js';
+import { sparqlLangTag, sparqlSubject } from '../utils/TripleSyntax.js';
 
 export class ReasonableEngine {
   constructor(private triplestore: TriplestoreAdapter) {}
@@ -29,10 +31,11 @@ export class ReasonableEngine {
     // Get agent's context graph as Turtle
     const aboxTtl = await this.triplestore.getGraph(contextGraphUri, 'turtle');
 
-    // New triples as N-Triples string
-    const newTtl = newTriples.map(t => ReasonableEngine.tripleToNt(t)).join('\n');
-
     try {
+      // New triples as N-Triples string (terms validated/escaped; a value that
+      // cannot be written safely aborts reasoning instead of reaching the parser).
+      const newTtl = newTriples.map(t => ReasonableEngine.tripleToNt(t)).join('\n');
+
       // inferTriples is now async (the native reasoner runs on a libuv worker
       // thread instead of blocking the event loop). Baseline and extended are
       // independent runs, so materialize them in parallel — this also exercises
@@ -77,14 +80,14 @@ export class ReasonableEngine {
 
   /** Serialize a triple to an N-Triples line. */
   private static tripleToNt(t: Triple): string {
-    const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-    const p = `<${t.predicate}>`;
+    const s = sparqlSubject(t.subject);
+    const p = sparqlIri(t.predicate);
     let o = '';
     if (typeof t.object === 'string') {
-      o = (t.object.startsWith('http') || t.object.startsWith('urn:')) ? `<${t.object}>` : `"${t.object}"`;
+      o = (t.object.startsWith('http') || t.object.startsWith('urn:')) ? sparqlIri(t.object) : sparqlStringLiteral(t.object);
     } else {
-      if (t.object.type === 'uri') o = `<${t.object.value}>`;
-      else o = `"${t.object.value}"` + (t.object.language ? `@${t.object.language}` : '');
+      if (t.object.type === 'uri') o = sparqlIri(t.object.value);
+      else o = sparqlStringLiteral(t.object.value) + (t.object.language ? sparqlLangTag(t.object.language) : '');
     }
     return `${s} ${p} ${o} .`;
   }

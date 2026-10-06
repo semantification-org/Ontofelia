@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
-import { GraphUriResolver } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, sparqlIri, sparqlStringLiteral } from '@ontofelia/semantic-memory';
 
 /**
  * Provenance metadata lives in core:Claim objects (urn:shared:ontology#…),
@@ -54,14 +54,24 @@ export class MemoryAskTool implements ToolDefinition {
     // entities live in the user, worldview and self graphs; claim provenance
     // lives in the claims graph. We query across all of them by graph URI.
     const agentId = context.agentId;
-    const claimsGraph = GraphUriResolver.getClaimsGraph(agentId);
+    let claimsGraphIri: string;
+    try {
+      claimsGraphIri = sparqlIri(GraphUriResolver.getClaimsGraph(agentId));
+    } catch (e) {
+      return this.fail(data, start, (e as Error).message);
+    }
 
     let sparql = '';
 
     switch (data.template) {
       case 'what_do_i_know_about': {
         if (!data.entity) throw new Error('entity is required for what_do_i_know_about');
-        const entityUri = this.toEntityUri(data.entity);
+        let entityIri: string;
+        try {
+          entityIri = sparqlIri(this.toEntityUri(data.entity));
+        } catch (e) {
+          return this.fail(data, start, (e as Error).message);
+        }
         // Find all triples where entity is subject OR object, in any of the
         // agent's own knowledge graphs (urn:<agent>:*) or the shared graphs.
         sparql = `
@@ -69,12 +79,12 @@ export class MemoryAskTool implements ToolDefinition {
           SELECT ?direction ?property ?propertyLabel ?value ?valueLabel ?graph WHERE {
             {
               GRAPH ?graph {
-                <${entityUri}> ?property ?value .
+                ${entityIri} ?property ?value .
               }
               BIND("outgoing" AS ?direction)
             } UNION {
               GRAPH ?graph {
-                ?value ?property <${entityUri}> .
+                ?value ?property ${entityIri} .
               }
               BIND("incoming" AS ?direction)
             }
@@ -103,7 +113,7 @@ export class MemoryAskTool implements ToolDefinition {
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?learnedAt WHERE {
-            GRAPH <${claimsGraph}> {
+            GRAPH ${claimsGraphIri} {
               ?claim a claim:Claim ;
                      claim:claimSubject   ?s ;
                      claim:claimPredicate ?p ;
@@ -123,14 +133,14 @@ export class MemoryAskTool implements ToolDefinition {
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?confidence WHERE {
-            GRAPH <${claimsGraph}> {
+            GRAPH ${claimsGraphIri} {
               ?claim a claim:Claim ;
                      claim:claimSubject    ?s ;
                      claim:claimPredicate  ?p ;
                      claim:claimObject     ?o ;
                      claim:confidenceLabel ?confidence ;
                      claim:status          "accepted" .
-              FILTER(LCASE(STR(?confidence)) = LCASE("${data.confidence.replace(/"/g, '')}"))
+              FILTER(LCASE(STR(?confidence)) = LCASE(${sparqlStringLiteral(String(data.confidence))}))
             }
             OPTIONAL { GRAPH ?g1 { ?s rdfs:label ?sLabel } }
             OPTIONAL { GRAPH ?g2 { ?p rdfs:label ?pLabel } }
@@ -173,5 +183,23 @@ export class MemoryAskTool implements ToolDefinition {
         }
       };
     }
+  }
+
+  private fail(input: unknown, start: number, error: string): ToolResult {
+    return {
+      success: false,
+      output: null,
+      error,
+      auditEntry: {
+        toolName: this.name,
+        timestamp: new Date().toISOString(),
+        duration: Date.now() - start,
+        input,
+        output: null,
+        success: false,
+        error,
+        permissions: [...this.permissions]
+      }
+    };
   }
 }

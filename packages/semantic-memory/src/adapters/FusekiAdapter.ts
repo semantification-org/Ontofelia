@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { TriplestoreAdapter, TriplestoreConfig, SparqlResult, RdfFormat, Triple, HealthResult } from '@ontofelia/core';
-import { sparqlStringLiteral } from '../utils/SparqlSyntax.js';
+import { sparqlIri } from '../utils/SparqlSyntax.js';
+import { sparqlTripleLine } from '../utils/TripleSyntax.js';
 
 export class FusekiAdapter implements TriplestoreAdapter {
   readonly backend = 'fuseki';
@@ -129,50 +130,21 @@ export class FusekiAdapter implements TriplestoreAdapter {
     if (!res.ok && res.status !== 404) throw new Error(`deleteGraph failed: ${res.statusText}`);
   }
 
-  private formatObject(obj: Triple['object']): string {
-    if (typeof obj === 'string') {
-      if (obj.startsWith('http://') || obj.startsWith('https://') || obj.startsWith('urn:')) {
-        return `<${obj}>`;
-      }
-      return sparqlStringLiteral(obj); // Simple literal string
-    }
-    
-    if (obj.type === 'uri') {
-      return `<${obj.value}>`;
-    }
-    
-    let literal = sparqlStringLiteral(obj.value);
-    if (obj.language) {
-      literal += `@${obj.language}`;
-    }
-    return literal;
-  }
-
   async insertTriples(graphUri: string, triples: Triple[]): Promise<void> {
     if (triples.length === 0) return;
     
-    const lines = triples.map(t => {
-      const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-      const p = `<${t.predicate}>`;
-      const o = this.formatObject(t.object);
-      return `${s} ${p} ${o} .`;
-    }).join('\\n');
+    const lines = triples.map(sparqlTripleLine).join('\n');
     
-    const sparql = `INSERT DATA { GRAPH <${graphUri}> { ${lines} } }`;
+    const sparql = `INSERT DATA { GRAPH ${sparqlIri(graphUri)} { ${lines} } }`;
     await this.update(sparql);
   }
 
   async deleteTriples(graphUri: string, triples: Triple[]): Promise<void> {
     if (triples.length === 0) return;
     
-    const lines = triples.map(t => {
-      const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-      const p = `<${t.predicate}>`;
-      const o = this.formatObject(t.object);
-      return `${s} ${p} ${o} .`;
-    }).join('\\n');
+    const lines = triples.map(sparqlTripleLine).join('\n');
     
-    const sparql = `DELETE DATA { GRAPH <${graphUri}> { ${lines} } }`;
+    const sparql = `DELETE DATA { GRAPH ${sparqlIri(graphUri)} { ${lines} } }`;
     await this.update(sparql);
   }
 

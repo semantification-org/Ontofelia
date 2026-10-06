@@ -4,7 +4,9 @@ import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { sparqlStringLiteral } from '../utils/SparqlSyntax.js';
+import { sparqlIri } from '../utils/SparqlSyntax.js';
+import { sparqlTripleLine } from '../utils/TripleSyntax.js';
+import { turtleTerm, type TurtleTermInput } from '../utils/TurtleSyntax.js';
 
 /**
  * Adapter for the embedded Oxigraph triplestore.
@@ -142,14 +144,11 @@ export class OxigraphAdapter implements TriplestoreAdapter {
       {
         // Format to Turtle
         let graphStr = '';
-        type RdfTerm = { termType: string; value: string; language?: string; datatype?: { value: string } };
-        type RdfQuad = { subject: RdfTerm; predicate: RdfTerm; object: RdfTerm };
+        type RdfQuad = { subject: TurtleTermInput; predicate: TurtleTermInput; object: TurtleTermInput };
         for (const quad of (result as Iterable<RdfQuad>)) {
-            const subject = quad.subject.termType === 'NamedNode' ? `<${quad.subject.value}>` : `_:${quad.subject.value}`;
-            const predicate = `<${quad.predicate.value}>`;
-            const object = quad.object.termType === 'NamedNode' ? `<${quad.object.value}>` :
-                           quad.object.termType === 'Literal' ? `"${quad.object.value.replace(/"/g, '\\"')}"` + (quad.object.language ? `@${quad.object.language}` : (quad.object.datatype && quad.object.datatype.value !== 'http://www.w3.org/2001/XMLSchema#string' ? `^^<${quad.object.datatype.value}>` : '')) :
-                           `_:${quad.object.value}`;
+            const subject = turtleTerm(quad.subject);
+            const predicate = turtleTerm(quad.predicate);
+            const object = turtleTerm(quad.object);
             graphStr += `${subject} ${predicate} ${object} .\n`;
         }
         return { type: 'graph', graph: graphStr };
@@ -170,7 +169,7 @@ export class OxigraphAdapter implements TriplestoreAdapter {
 
   async getGraph(graphUri: string, _format: RdfFormat = 'turtle'): Promise<string> {
     // Construct query for a single graph
-    const sparql = `CONSTRUCT { ?s ?p ?o } WHERE { GRAPH <${graphUri}> { ?s ?p ?o } }`;
+    const sparql = `CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ${sparqlIri(graphUri)} { ?s ?p ?o } }`;
     const result = await this.query(sparql);
     return result.graph || '';
   }
@@ -190,54 +189,25 @@ export class OxigraphAdapter implements TriplestoreAdapter {
   }
 
   async deleteGraph(graphUri: string): Promise<void> {
-    const sparql = `CLEAR GRAPH <${graphUri}>`;
+    const sparql = `CLEAR GRAPH ${sparqlIri(graphUri)}`;
     await this.update(sparql);
-  }
-
-  private formatObject(obj: Triple['object']): string {
-    if (typeof obj === 'string') {
-      if (obj.startsWith('http://') || obj.startsWith('https://') || obj.startsWith('urn:')) {
-        return `<${obj}>`;
-      }
-      return sparqlStringLiteral(obj);
-    }
-
-    if (obj.type === 'uri') {
-      return `<${obj.value}>`;
-    }
-
-    let literal = sparqlStringLiteral(obj.value);
-    if (obj.language) {
-      literal += `@${obj.language}`;
-    }
-    return literal;
   }
 
   async insertTriples(graphUri: string, triples: Triple[]): Promise<void> {
     if (triples.length === 0) return;
 
-    const lines = triples.map(t => {
-      const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-      const p = `<${t.predicate}>`;
-      const o = this.formatObject(t.object);
-      return `${s} ${p} ${o} .`;
-    }).join('\n');
+    const lines = triples.map(sparqlTripleLine).join('\n');
 
-    const sparql = `INSERT DATA { GRAPH <${graphUri}> { ${lines} } }`;
+    const sparql = `INSERT DATA { GRAPH ${sparqlIri(graphUri)} { ${lines} } }`;
     await this.update(sparql);
   }
 
   async deleteTriples(graphUri: string, triples: Triple[]): Promise<void> {
     if (triples.length === 0) return;
 
-    const lines = triples.map(t => {
-      const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-      const p = `<${t.predicate}>`;
-      const o = this.formatObject(t.object);
-      return `${s} ${p} ${o} .`;
-    }).join('\n');
+    const lines = triples.map(sparqlTripleLine).join('\n');
 
-    const sparql = `DELETE DATA { GRAPH <${graphUri}> { ${lines} } }`;
+    const sparql = `DELETE DATA { GRAPH ${sparqlIri(graphUri)} { ${lines} } }`;
     await this.update(sparql);
   }
 
