@@ -27,6 +27,7 @@ describe('importVault with hostile frontmatter values', () => {
     await store.initialize({ backend: 'oxigraph', type: 'embedded',
       dataDir: mkdtempSync(join(tmpdir(), 'hostile-store-')), port: 0, endpoint: '' } as never);
     const engine = new KnowledgeEngine(store as never);
+    const rows = async (sparql: string) => (await store.query(sparql)).bindings ?? [];
 
     const root = mkdtempSync(join(tmpdir(), 'hostile-vault-'));
     mkdirSync(join(root, 'Notes'));
@@ -57,9 +58,9 @@ describe('importVault with hostile frontmatter values', () => {
     expect(report.notes.find(n => n.path === 'Notes/normal.md')!.facts.every(f => f.outcome === 'stored')).toBe(true);
 
     // Literals round-trip byte-exact.
-    const lits = (await store.query(
+    const lits = (await rows(
       `SELECT ?o WHERE { GRAPH <urn:${AGENT}:worldview> { ?s ?p ?o FILTER(isLiteral(?o)) } }`,
-    ) as any).bindings.map((b: any) => b.o.value as string);
+    )).map(b => b.o.value);
     expect(lits).toContain('a\rb');
     expect(lits).toContain('x\\" y');
     expect(lits).toContain('brace } here');
@@ -67,18 +68,17 @@ describe('importVault with hostile frontmatter values', () => {
     expect(lits).toContain('red');
 
     // The hostile entity-valued fact produced a claim whose object is a plain IRI.
-    const claims = (await store.query(
+    const claims = (await rows(
       `SELECT (COUNT(*) AS ?n) WHERE { GRAPH <urn:${AGENT}:claims> { ?c a <urn:shared:ontology#Claim> } }`,
-    ) as any).bindings[0].n.value;
+    ))[0].n.value;
     expect(Number(claims)).toBeGreaterThanOrEqual(7);
 
     // Nothing was injected anywhere.
-    const pwn = (await store.query('SELECT (COUNT(*) AS ?n) WHERE { GRAPH <urn:pwn> { ?s ?p ?o } }') as any)
-      .bindings[0].n.value;
+    const pwn = (await rows('SELECT (COUNT(*) AS ?n) WHERE { GRAPH <urn:pwn> { ?s ?p ?o } }'))[0].n.value;
     expect(Number(pwn)).toBe(0);
-    const stray = (await store.query(
+    const stray = (await rows(
       'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } FILTER(CONTAINS(STR(?s), "urn:a") && STR(?s) = "urn:a") }',
-    ) as any).bindings[0].n.value;
+    ))[0].n.value;
     expect(Number(stray)).toBe(0);
 
     // The reasoner never choked on a hostile term.

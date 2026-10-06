@@ -1,4 +1,4 @@
-import { TriplestoreAdapter, TriplestoreConfig } from '@ontofelia/core';
+import { TriplestoreAdapter, TriplestoreConfig, Triple } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
@@ -1211,7 +1211,7 @@ export class KnowledgeEngine {
     let conflictIri: string;
     let supersedingIri: string;
     let baseTriple: string | undefined;
-    let retired: { subject: string; predicate: string; object: { type: string; value: string; language?: string } } | undefined;
+    let retired: Triple | undefined;
     try {
       claimIri = sparqlIri(claim.claimUri);
       assertedGraphIri = sparqlIri(claim.assertedInGraph);
@@ -1287,9 +1287,8 @@ export class KnowledgeEngine {
       // accumulates stale conclusions after every belief revision.
       if (this.reasoner && retired) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const scope = GraphUriResolver.getInferenceScope(agentId, claim.assertedInGraph);
-          const stale = await this.reasoner.materialize([retired as any], scope.aboxGraphs);
+          const stale = await this.reasoner.materialize([retired], scope.aboxGraphs);
           if (stale.length > 0) {
             const inferredGraph = sparqlIri(scope.inferredGraph);
             // Best-effort and per triple: a stale entailment that cannot be
@@ -1544,7 +1543,7 @@ export class KnowledgeEngine {
   // reasoner itself works.
   let inferredTriples: Array<{ subject: string; predicate: string; object: unknown }> = [];
   if (this.reasoner && status === 'accepted') {
-    const inputTriple = {
+    const inputTriple: Triple = {
       subject: subject.uri,
       predicate: predicate.uri,
       object: fact.objectType === 'literal' || !fact.objectType
@@ -1552,11 +1551,10 @@ export class KnowledgeEngine {
         : { type: 'uri', value: objectUri },
     };
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       // A private fact is reasoned over worldview + that user's graph; a
       // worldview fact over the worldview alone (see getInferenceScope).
       inferredTriples = await this.reasoner.materialize(
-        [inputTriple as any],
+        [inputTriple],
         GraphUriResolver.getInferenceScope(context.agentId, targetGraph).aboxGraphs,
       );
     } catch {

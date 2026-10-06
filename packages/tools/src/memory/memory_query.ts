@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
 import { checkSparqlScope, getQueryableGraphScope } from '@ontofelia/semantic-memory';
 

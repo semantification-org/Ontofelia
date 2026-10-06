@@ -142,8 +142,8 @@ for (const AGENT of ['ontofelia', 'maia']) {
       const graphs = [R.getClaimsGraph(AGENT), R.getEvidenceGraph(AGENT), R.getConflictsGraph(AGENT),
         R.getCogEpisodicGraph(AGENT), 'urn:shared:claims', 'urn:shared:evidence'];
       // Control: the secret really is in the graphs a plain read reaches.
-      const all: any = await store.query(`SELECT ?g ?o WHERE { GRAPH ?g { ?s ?p ?o } }`);
-      const holders = all.bindings.filter((b: any) => /BobPrivate/.test(b.o.value)).map((b: any) => b.g.value);
+      const all = await store.query(`SELECT ?g ?o WHERE { GRAPH ?g { ?s ?p ?o } }`);
+      const holders = (all.bindings ?? []).filter(b => /BobPrivate/.test(b.o.value)).map(b => b.g.value);
       expect(holders).toContain(R.getClaimsGraph(AGENT));
       expect(holders).toContain(R.getEvidenceGraph(AGENT));
       for (const g of graphs) {

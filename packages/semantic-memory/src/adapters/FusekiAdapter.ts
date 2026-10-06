@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { TriplestoreAdapter, TriplestoreConfig, SparqlResult, RdfFormat, Triple, HealthResult } from '@ontofelia/core';
 import { sparqlIri } from '../utils/SparqlSyntax.js';
 import { sparqlTripleLine } from '../utils/TripleSyntax.js';

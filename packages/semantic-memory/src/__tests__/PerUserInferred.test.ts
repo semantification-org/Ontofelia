@@ -45,15 +45,15 @@ beforeEach(async () => {
 
 /** Every `?g ?s ?p ?o` row of the graphs whose URI contains "inferred". */
 async function inferredRows(): Promise<string[]> {
-  const r: any = await store.query(
+  const r = await store.query(
     `SELECT ?g ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } FILTER(CONTAINS(STR(?g), "inferred")) } ORDER BY ?g ?s ?p ?o`,
   );
-  return r.bindings.map((b: any) => `${b.g.value} | ${b.s.value} | ${b.p.value} | ${b.o.value}`);
+  return (r.bindings ?? []).map(b => `${b.g.value} | ${b.s.value} | ${b.p.value} | ${b.o.value}`);
 }
 
 async function graphText(graph: string): Promise<string> {
-  const r: any = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
-  return r.bindings.map((b: any) => `${b.s.value} ${b.p.value} ${b.o.value}`).join('\n');
+  const r = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
+  return (r.bindings ?? []).map(b => `${b.s.value} ${b.p.value} ${b.o.value}`).join('\n');
 }
 
 const bobLikes = () => engine.storeFact(
@@ -190,7 +190,7 @@ describe('rebuildInferredGraphs', () => {
 
   it('leaves the existing derivations alone when the reasoner fails', async () => {
     await bobLikes();
-    const failing = engine as any;
+    const failing = engine as unknown as { reasoner: { materialize: () => Promise<never> } };
     failing.reasoner.materialize = async () => { throw new Error('boom'); };
     await expect(engine.rebuildInferredGraphs(AGENT)).rejects.toThrow('boom');
     expect(await graphText(BOB_INF)).toContain('SecretBobThing');

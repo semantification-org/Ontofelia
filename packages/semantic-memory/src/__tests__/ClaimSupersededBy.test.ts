@@ -27,8 +27,8 @@ let store: OxigraphAdapter;
 let engine: KnowledgeEngine;
 
 async function rows(sparql: string): Promise<Array<Record<string, { value: string; datatype?: string }>>> {
-  const r: any = await store.query(sparql);
-  return r.bindings;
+  const r = await store.query(sparql);
+  return r.bindings ?? [];
 }
 
 const livesIn = (place: string) => engine.storeFact(

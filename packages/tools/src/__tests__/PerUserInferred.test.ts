@@ -21,8 +21,8 @@ const ctx = (senderId: string): ToolContext => ({
 }) as unknown as ToolContext;
 
 async function graphText(graph: string): Promise<string> {
-  const r: any = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
-  return r.bindings.map((b: any) => `${b.s.value} ${b.p.value} ${b.o.value}`).join('\n');
+  const r = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
+  return (r.bindings ?? []).map(b => `${b.s.value} ${b.p.value} ${b.o.value}`).join('\n');
 }
 
 beforeEach(async () => {

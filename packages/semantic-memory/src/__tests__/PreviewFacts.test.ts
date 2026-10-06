@@ -24,8 +24,8 @@ let store: OxigraphAdapter;
 let engine: KnowledgeEngine;
 
 async function rows(sparql: string): Promise<Array<Record<string, { value: string }>>> {
-  const r: any = await store.query(sparql);
-  return r.bindings;
+  const r = await store.query(sparql);
+  return r.bindings ?? [];
 }
 const countAll = async (): Promise<number> =>
   Number((await rows('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }'))[0].n.value);
