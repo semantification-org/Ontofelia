@@ -31,6 +31,15 @@ export interface FactContext {
   ingestionRunId?: string;
 }
 
+/** Result of `KnowledgeEngine.previewFacts` for one fact. */
+export interface FactPreview {
+  fact: FactInput;
+  targetGraph: string;
+  duplicate: boolean;
+  /** Claim URIs of accepted claims this fact would supersede. */
+  wouldSupersede: string[];
+}
+
 export interface StoreResult {
   success: boolean;
   subjectUri: string;

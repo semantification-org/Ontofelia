@@ -5,7 +5,7 @@ import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
 import { ClaimProvenanceService, assertValidEvidenceSourceUri } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
-import { FactInput, FactContext, StoreResult } from './types.js';
+import { FactInput, FactContext, FactPreview, StoreResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
 const CORE_NS = 'urn:ontofelia:core#';
@@ -92,6 +92,18 @@ const REQUIRED_USER_PROPERTIES: Array<{ predicates: string[]; label: string; que
 ];
 
 const REQUIRED_IDENTITY_PROPERTIES: Array<{ predicates: string[]; label: string; question: string }> = [];
+
+/** Subject names that denote the current user rather than a named person. */
+const USER_ALIASES = new Set(['user', 'me', 'i']);
+
+/**
+ * True when `subject` is a user alias ("user", "me", "i"), case-insensitive.
+ * The single source of the alias list: the engine's routing and the Vault-LD
+ * mapper (which refuses such subjects) both call it.
+ */
+export function isUserAliasSubject(subject: string): boolean {
+  return USER_ALIASES.has((subject || '').trim().toLowerCase());
+}
 
 export class KnowledgeEngine {
   private reasoner?: ReasonableEngine;
@@ -291,6 +303,38 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Read-only half of `resolveEntity`: decide which URI an entity name maps to
+   * (canonical pin, type-compatible label match, disambiguated or slug URI)
+   * without creating anything. `resolveEntity` and `previewFacts` share it so a
+   * preview names the same node a write would.
+   */
+  private async lookupEntityUri(
+    name: string,
+    type?: string,
+    agentGraph?: string,
+    canonicalUri?: string,
+    scope?: { agentId: string; userId?: string },
+  ): Promise<{ uri: string; lookupGraphs: string[] }> {
+    const lookupGraphs = scope
+      ? [...this.labelGraphsFor(scope.agentId, scope.userId), GraphUriResolver.getSelfGraph(scope.agentId)]
+      : [...new Set([...(agentGraph ? [agentGraph] : []), TBOX_GRAPH])];
+    let uri: string;
+    if (canonicalUri) {
+      uri = canonicalUri;
+    } else {
+      const match = await this.findEntityByLabel(name, type, lookupGraphs);
+      if (match && 'uri' in match) {
+        uri = match.uri;
+      } else if (match && 'conflict' in match) {
+        uri = await this.mintDisambiguatedUri(name, type, lookupGraphs);
+      } else {
+        uri = this.toEntityUri(name);
+      }
+    }
+    return { uri, lookupGraphs };
+  }
+
+  /**
    * Resolve an entity: find existing or create new Individual in the ABox.
    *
    * Resolution order:
@@ -315,23 +359,8 @@ export class KnowledgeEngine {
     canonicalUri?: string,
     scope?: { agentId: string; userId?: string },
   ): Promise<{ uri: string; isNew: boolean }> {
-    const lookupGraphs = scope
-      ? [...this.labelGraphsFor(scope.agentId, scope.userId), GraphUriResolver.getSelfGraph(scope.agentId)]
-      : [...new Set([...(agentGraph ? [agentGraph] : []), TBOX_GRAPH])];
+    const { uri, lookupGraphs } = await this.lookupEntityUri(name, type, agentGraph, canonicalUri, scope);
     const valuesG = this.graphValuesClause(lookupGraphs, '?g');
-    let uri: string;
-    if (canonicalUri) {
-      uri = canonicalUri;
-    } else {
-      const match = await this.findEntityByLabel(name, type, lookupGraphs);
-      if (match && 'uri' in match) {
-        uri = match.uri;
-      } else if (match && 'conflict' in match) {
-        uri = await this.mintDisambiguatedUri(name, type, lookupGraphs);
-      } else {
-        uri = this.toEntityUri(name);
-      }
-    }
 
     // Check if entity already exists anywhere
     const exists = await this.triplestore.ask(`ASK { ${valuesG} GRAPH ?g { <${uri}> a ?type } }`);
@@ -715,10 +744,6 @@ export class KnowledgeEngine {
    */
   private static readonly SELF_ALIASES = new Set(['ontofelia', 'self']);
 
-  /** Subject names that denote the current user rather than a named person. */
-  private static readonly USER_ALIASES = new Set([
-    'user', 'me', 'i',
-  ]);
 
   /**
    * Normalized predicates that flag a user-stated agent fact as an
@@ -865,7 +890,7 @@ export class KnowledgeEngine {
   private canonicalUserUri(name: string, fact: FactInput, context: FactContext): string | null {
     if (!context.userId) return null;
     const lc = (name || '').trim().toLowerCase();
-    if (KnowledgeEngine.USER_ALIASES.has(lc)) {
+    if (isUserAliasSubject(lc)) {
       return this.userEntityUri(context.userId);
     }
     const fromUser = fact.sourceKind === 'user' || context.isOwner;
@@ -1011,8 +1036,7 @@ export class KnowledgeEngine {
   private resolveTargetGraph(fact: FactInput, context: FactContext): string {
     const fromUser = fact.sourceKind === 'user' || context.isOwner;
     if (fromUser && context.userId) {
-      const subjectLc = (fact.subject || '').trim().toLowerCase();
-      const isUserSubject = KnowledgeEngine.USER_ALIASES.has(subjectLc);
+      const isUserSubject = isUserAliasSubject(fact.subject);
       // A user EXPECTATION/REQUEST about the agent is re-anchored to the user
       // node, so it belongs in the per-user graph. A DESCRIPTIVE / identity fact
       // about the agent must NOT go there — it stays on the agent entity and
@@ -1243,6 +1267,49 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Read-only preview of what `storeFact` would do with each fact: the graph it
+   * would land in, whether it is a duplicate, and which accepted claims it
+   * would supersede. Writes nothing: entities and predicates are resolved with
+   * the same lookups `storeFact` uses, minus the INSERTs — a predicate that does
+   * not exist yet is simply non-functional. Each fact is judged against the
+   * current store only, not against earlier facts of the same batch.
+   */
+  async previewFacts(facts: FactInput[], context: FactContext): Promise<FactPreview[]> {
+    const out: FactPreview[] = [];
+    for (const fact of facts) {
+      if (fact.sourceUri) assertValidEvidenceSourceUri(fact.sourceUri);
+      const targetGraph = this.assertGraph(this.resolveTargetGraph(fact, context));
+      if (await this.isDuplicate(fact, context.agentId, context)) {
+        out.push({ fact, targetGraph, duplicate: true, wouldSupersede: [] });
+        continue;
+      }
+      const scope = { agentId: context.agentId, userId: context.userId };
+      const subject = await this.lookupEntityUri(
+        fact.subject, fact.subjectType, targetGraph, this.canonicalSubjectUri(fact, context), scope,
+      );
+      const predicateUri = BUILTIN_NAMESPACES.some(ns => this.toPropertyUri(fact.predicate).startsWith(ns))
+        ? this.toPropertyUri(fact.predicate)
+        : (await this.findPropertyByLabel(fact.predicate, context.agentId)) ?? this.toPropertyUri(fact.predicate);
+      let objectTriple: string;
+      if (fact.objectType === 'literal' || !fact.objectType) {
+        objectTriple = `"${this.escapeLiteral(fact.object)}"`;
+      } else {
+        const obj = await this.lookupEntityUri(fact.object, fact.objectType, targetGraph, undefined, scope);
+        objectTriple = `<${obj.uri}>`;
+      }
+      let wouldSupersede: string[] = [];
+      if (fact.status !== 'rejected' && await this.isFunctionalProperty(predicateUri, context.agentId)) {
+        const conflicting = await this.findConflictingClaims(
+          subject.uri, predicateUri, objectTriple, context.agentId, targetGraph,
+        );
+        wouldSupersede = conflicting.map(c => c.claimUri);
+      }
+      out.push({ fact, targetGraph, duplicate: false, wouldSupersede });
+    }
+    return out;
+  }
+
+  /**
    * Store a fact as real RDF triples in the ABox, with provenance.
    * Automatically resolves entities and properties (creating them if needed).
    * Skips storage if the exact triple already exists (duplicate detection).
@@ -1402,7 +1469,7 @@ export class KnowledgeEngine {
   // AND on the subject being a USER_ALIAS, not merely on a canonical subject.
   // G1 (#1035): never materialize owl:sameAs between the agent entity and the
   // owner in either direction — guarded by `objectDenotesAgent` below.
-  const subjectIsUserAlias = KnowledgeEngine.USER_ALIASES.has((fact.subject || '').trim().toLowerCase());
+  const subjectIsUserAlias = isUserAliasSubject(fact.subject);
   if (status === 'accepted' && userCanonical && subjectIsUserAlias) {
     const predLc = fact.predicate.replace(/[-_\s]/g, '').toLowerCase();
     const NAME_PREDICATES = new Set(['name', 'hasname', 'fullname', 'firstname', 'lastname', 'vorname', 'nachname']);
