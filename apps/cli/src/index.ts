@@ -24,6 +24,7 @@ import { registerResetCommand } from './commands/reset.js';
 import { registerDataResetCommand } from './commands/data-reset.js';
 import { registerRebuildCommand } from './commands/rebuild.js';
 import { registerUninstallCommand } from './commands/uninstall.js';
+import { registerVaultCommand } from './commands/vault.js';
 
 // Guard against tsx dual-package hazard (module resolved twice as ESM + CJS).
 // Symbol.for() returns the same symbol across module boundaries, so the flag
@@ -62,5 +63,6 @@ if (!(globalThis as Record<symbol, boolean>)[GUARD]) {
   registerDataResetCommand(program);
   registerRebuildCommand(program);
   registerUninstallCommand(program);
+  registerVaultCommand(program);
   program.parse(process.argv);
 }

@@ -28,3 +28,6 @@ export * from './ingestion/TrivialMessageDetector.js';
 export * from './ingestion/SemanticParser.js';
 export * from './ingestion/OntologyContextProvider.js';
 export * from './ingestion/SemanticIngestionService.js';
+export * from './sparql/scopeGuard.js';
+export * from './ingestion/VaultNoteMapper.js';
+export * from './ingestion/VaultImporter.js';

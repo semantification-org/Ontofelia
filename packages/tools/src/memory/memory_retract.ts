@@ -1,6 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult, ToolPermission, ToolCategory } from '@ontofelia/core';
 import { TriplestoreAdapter } from '@ontofelia/core';
-import { GraphUriResolver, GraphRegistry, GraphPolicyError, sparqlIri, sparqlStringLiteral } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, GraphRegistry, GraphPolicyError, KnowledgeEngine, sparqlIri, sparqlStringLiteral } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -63,6 +63,19 @@ export class MemoryRetractTool implements ToolDefinition {
       throw e;
     }
 
+    // A caller may only retract from the agent worldview or its own user graph.
+    // Another user's graph is refused before anything is touched.
+    const allowedGraphs = [GraphUriResolver.getWorldviewGraph(context.agentId)];
+    if (context.senderId) allowedGraphs.push(GraphUriResolver.getUserGraph(context.agentId, context.senderId));
+    if (!allowedGraphs.includes(targetGraph)) {
+      return this.fail(
+        args,
+        startTime,
+        `Refused: <${targetGraph}> is not a graph you may retract from. ` +
+          `Allowed graphs: ${allowedGraphs.map((g) => `<${g}>`).join(', ')}. Nothing was changed.`,
+      );
+    }
+
     // Every value that reaches the query text is validated (IRIs) or escaped
     // (literals). These arguments come from the model, so an invalid value is
     // a normal tool failure, never a query.
@@ -110,6 +123,7 @@ export class MemoryRetractTool implements ToolDefinition {
           ?claim a claim:Claim ;
                  claim:claimSubject   ${subjectIri} ;
                  claim:claimPredicate ${predicateIri} ;
+                 (claim:assertedInGraph|claim:targetGraph) ${targetGraphIri} ;
                  ${objectFilter}
                  ?cp ?co .
           OPTIONAL { ?claim claim:hasEvidence ?evidence . }
@@ -122,6 +136,22 @@ export class MemoryRetractTool implements ToolDefinition {
       await this.triplestore.update(deleteProvenance);
     } catch (e) {
       return this.fail(args, startTime, (e as Error).message);
+    }
+
+    // Derivations of the removed fact must not outlive it: recompute the
+    // inferred graph that belongs to the target graph. If the recompute
+    // cannot run, drop that inferred graph instead — a missing derivation is
+    // acceptable, a stale one (possibly of private data) is not.
+    try {
+      await new KnowledgeEngine(this.triplestore, undefined, this.registry)
+        .rebuildInferredGraphFor(context.agentId, targetGraph);
+    } catch {
+      try {
+        const { inferredGraph } = GraphUriResolver.getInferenceScope(context.agentId, targetGraph);
+        await this.triplestore.update(`CLEAR SILENT GRAPH ${sparqlIri(inferredGraph)}`);
+      } catch {
+        // Best effort: the fact itself is already gone.
+      }
     }
 
     return {

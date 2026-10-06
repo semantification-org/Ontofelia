@@ -2,12 +2,12 @@ import { TriplestoreAdapter, TriplestoreConfig } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
-import { ClaimProvenanceService } from './provenance/ClaimProvenanceService.js';
+import { ClaimProvenanceService, assertValidEvidenceSourceUri } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
 import { escapeSparqlStringContent, sparqlIri, sparqlStringLiteral } from './utils/SparqlSyntax.js';
 import { sparqlTripleLine } from './utils/TripleSyntax.js';
-import { FactInput, FactContext, StoreResult, ConsistencyResult } from './types.js';
+import { FactInput, FactContext, FactPreview, StoreResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
 const CORE_NS = 'urn:ontofelia:core#';
@@ -115,6 +115,18 @@ const REQUIRED_USER_PROPERTIES: Array<{ predicates: string[]; label: string; que
 ];
 
 const REQUIRED_IDENTITY_PROPERTIES: Array<{ predicates: string[]; label: string; question: string }> = [];
+
+/** Subject names that denote the current user rather than a named person. */
+const USER_ALIASES = new Set(['user', 'me', 'i']);
+
+/**
+ * True when `subject` is a user alias ("user", "me", "i"), case-insensitive.
+ * The single source of the alias list: the engine's routing and the Vault-LD
+ * mapper (which refuses such subjects) both call it.
+ */
+export function isUserAliasSubject(subject: string): boolean {
+  return USER_ALIASES.has((subject || '').trim().toLowerCase());
+}
 
 export class KnowledgeEngine {
   private reasoner?: ReasonableEngine;
@@ -235,14 +247,19 @@ export class KnowledgeEngine {
   private async findEntityByLabel(
     name: string,
     type?: string,
+    graphs: string[] = [TBOX_GRAPH],
   ): Promise<{ uri: string } | { conflict: true } | null> {
     const needle = this.escapeLiteral(name.trim().toLowerCase());
     try {
       const res = await this.triplestore.query(`
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT ?e ?t WHERE {
+          ${this.graphValuesClause(graphs, '?g')}
           GRAPH ?g { ?e rdfs:label ?l }
-          OPTIONAL { GRAPH ?tg { ?e a ?t } }
+          OPTIONAL {
+            ${this.graphValuesClause(graphs, '?tg')}
+            GRAPH ?tg { ?e a ?t }
+          }
           FILTER(LCASE(STR(?l)) = "${needle}")
         } LIMIT 50
       `);
@@ -289,9 +306,15 @@ export class KnowledgeEngine {
    * it is already taken (by the conflicting entity) a type-derived suffix — and,
    * if necessary, a counter — is appended.
    */
-  private async mintDisambiguatedUri(name: string, type?: string): Promise<string> {
+  private async mintDisambiguatedUri(
+    name: string,
+    type?: string,
+    graphs: string[] = [TBOX_GRAPH],
+  ): Promise<string> {
     const base = this.toEntityUri(name);
-    const isTaken = (u: string) => this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(u)} a ?t } }`);
+    const valuesG = this.graphValuesClause(graphs, '?g');
+    const isTaken = (u: string) =>
+      this.triplestore.ask(`ASK { ${valuesG} GRAPH ?g { ${sparqlIri(u)} a ?t } }`);
     if (!(await isTaken(base))) return base;
 
     const suffix = type ? '_' + encodeURIComponent(type.trim().replace(/\s+/g, '_')) : '';
@@ -301,6 +324,38 @@ export class KnowledgeEngine {
       candidate = `${base}${suffix}_${n++}`;
     }
     return candidate;
+  }
+
+  /**
+   * Read-only half of `resolveEntity`: decide which URI an entity name maps to
+   * (canonical pin, type-compatible label match, disambiguated or slug URI)
+   * without creating anything. `resolveEntity` and `previewFacts` share it so a
+   * preview names the same node a write would.
+   */
+  private async lookupEntityUri(
+    name: string,
+    type?: string,
+    agentGraph?: string,
+    canonicalUri?: string,
+    scope?: { agentId: string; userId?: string },
+  ): Promise<{ uri: string; lookupGraphs: string[] }> {
+    const lookupGraphs = scope
+      ? [...this.labelGraphsFor(scope.agentId, scope.userId), GraphUriResolver.getSelfGraph(scope.agentId)]
+      : [...new Set([...(agentGraph ? [agentGraph] : []), TBOX_GRAPH])];
+    let uri: string;
+    if (canonicalUri) {
+      uri = canonicalUri;
+    } else {
+      const match = await this.findEntityByLabel(name, type, lookupGraphs);
+      if (match && 'uri' in match) {
+        uri = match.uri;
+      } else if (match && 'conflict' in match) {
+        uri = await this.mintDisambiguatedUri(name, type, lookupGraphs);
+      } else {
+        uri = this.toEntityUri(name);
+      }
+    }
+    return { uri, lookupGraphs };
   }
 
   /**
@@ -314,29 +369,25 @@ export class KnowledgeEngine {
    *      reused — a disambiguated URI is minted so "Paris (person)" and
    *      "Paris (city)" stay distinct.
    *   3. slug URI       — derive a fresh URI from the name.
+   *
+   * Lookups (label match, "already exists") only read the graphs the acting
+   * agent/user may see: with `scope`, that is the worldview, the user's own
+   * graph, the agent's self graph, the shared ontology and the schema graph.
+   * Without `scope` (no agent/user context) only the target `agentGraph` and
+   * the shared ontology are read — never another user's graph.
    */
   async resolveEntity(
     name: string,
     type?: string,
     agentGraph?: string,
-    canonicalUri?: string
+    canonicalUri?: string,
+    scope?: { agentId: string; userId?: string },
   ): Promise<{ uri: string; isNew: boolean }> {
-    let uri: string;
-    if (canonicalUri) {
-      uri = canonicalUri;
-    } else {
-      const match = await this.findEntityByLabel(name, type);
-      if (match && 'uri' in match) {
-        uri = match.uri;
-      } else if (match && 'conflict' in match) {
-        uri = await this.mintDisambiguatedUri(name, type);
-      } else {
-        uri = this.toEntityUri(name);
-      }
-    }
+    const { uri, lookupGraphs } = await this.lookupEntityUri(name, type, agentGraph, canonicalUri, scope);
+    const valuesG = this.graphValuesClause(lookupGraphs, '?g');
 
     // Check if entity already exists anywhere
-    const exists = await this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
+    const exists = await this.triplestore.ask(`ASK { ${valuesG} GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
 
     if (!exists && type) {
       const classUri = this.typeToClassUri(type);
@@ -440,7 +491,8 @@ export class KnowledgeEngine {
     if (labelMatch) return { uri: labelMatch, isNew: false };
 
     // 2. Known if defined in any graph — shared TBox or any agent schema graph.
-    const isKnown = await this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
+    const knownG = this.graphValuesClause(this.labelGraphsFor(agentId), '?g');
+    const isKnown = await this.triplestore.ask(`ASK { ${knownG} GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
     if (isKnown) return { uri, isNew: false };
 
     // 3. Register the new predicate in the agent-local schema graph.
@@ -502,20 +554,33 @@ export class KnowledgeEngine {
    * Only the current user's graph is ever included — never all users — so the
    * per-user isolation guarantee (#869) holds.
    *
-   * Two graphs are deliberately EXCLUDED:
+   * Deliberately EXCLUDED:
    *   - `:self` (identity) — surfaced separately by `getSystemPromptContext()`;
    *     including it here would duplicate the agent's identity into the
    *     "world knowledge" recall.
-   *   - `:inferred` — a single, agent-global graph into which on-write
-   *     materialisation writes every user's inferred triples. It is NOT
-   *     user-scoped, so reading it inside a per-user recall would leak one
-   *     user's (inferred) facts to another (#869). Surfacing multi-hop
-   *     inferences in recall needs a per-user inferred graph first.
+   *   - The inferred graphs. The shared `:inferred` graph now holds only
+   *     worldview derivations and `:inferred:user:<id>` only that user's, so
+   *     reading `GraphUriResolver.getReadableInferredGraphs(agent, user)` is
+   *     safe, but recall does not surface inferences yet.
    */
   private knowledgeGraphsFor(agentId: string, userId?: string): string[] {
     const graphs = [GraphUriResolver.getWorldviewGraph(agentId)];
     if (userId) graphs.push(GraphUriResolver.getUserGraph(agentId, userId));
     return graphs;
+  }
+
+  /**
+   * Graphs a lookup (labels, types, property declarations) may read for the
+   * given agent/user: the readable knowledge graphs (see `knowledgeGraphsFor`)
+   * plus the shared ontology and the agent schema graph, where predicate and
+   * class labels live. Never includes another user's graph.
+   */
+  private labelGraphsFor(agentId: string, userId?: string): string[] {
+    return [
+      ...this.knowledgeGraphsFor(agentId, userId),
+      TBOX_GRAPH,
+      GraphUriResolver.getSchemaGraph(agentId),
+    ];
   }
 
   /** Build a SPARQL `VALUES ?var { <g1> <g2> … }` clause over graph URIs. */
@@ -528,14 +593,18 @@ export class KnowledgeEngine {
    * Returns a formatted string ready for system prompt injection.
    *
    * Reads across the agent's real knowledge graphs (see `knowledgeGraphsFor`),
-   * not the dead `:abox` graph (#986). Labels are resolved across ANY named
-   * graph (`GRAPH ?lg`) because predicate labels live in the schema/TBox graph
-   * while entity labels live in the fact graph — and the embedded Oxigraph
-   * store has an empty default graph, so an un-scoped label join matches
-   * nothing.
+   * not the dead `:abox` graph. Labels are resolved in the knowledge
+   * graphs plus the shared ontology and the schema graph (see `labelGraphsFor`)
+   * because predicate labels live in the schema/TBox graph while entity labels
+   * live in the fact graph — and the embedded Oxigraph store has an empty
+   * default graph, so an un-scoped label join matches nothing. Another user's
+   * graph is never consulted for labels.
    */
   async getFactsAbout(entities: string[], agentId: string, limit = 20, userId?: string): Promise<string> {
     const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId, userId), '?g');
+    const labelGraphs = this.labelGraphsFor(agentId, userId);
+    const plg = this.graphValuesClause(labelGraphs, '?plg');
+    const olg = this.graphValuesClause(labelGraphs, '?olg');
     const facts: string[] = [];
 
     for (const entity of entities) {
@@ -557,8 +626,8 @@ export class KnowledgeEngine {
               BIND("in" AS ?direction)
               FILTER(?pred != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
             }
-            OPTIONAL { GRAPH ?plg { ?pred rdfs:label ?predLabel } }
-            OPTIONAL { GRAPH ?olg { ?other rdfs:label ?otherLabel } }
+            OPTIONAL { ${plg} GRAPH ?plg { ?pred rdfs:label ?predLabel } }
+            OPTIONAL { ${olg} GRAPH ?olg { ?other rdfs:label ?otherLabel } }
           }
           LIMIT ${sparqlCount(limit - facts.length)}
         `;
@@ -590,11 +659,15 @@ export class KnowledgeEngine {
    * entity. This gives the agent persistent memory across all sessions.
    *
    * Reads the worldview graph (+ the current user's graph when `userId` is
-   * given) — not the dead `:abox` graph (#986). Labels are resolved across any
-   * named graph because the embedded Oxigraph store has an empty default graph.
+   * given) — not the dead `:abox` graph. Labels are resolved in those
+   * graphs plus the shared ontology and schema graph (never another user's).
    */
   async getRecentFacts(agentId: string, limit = 30, userId?: string): Promise<string> {
     const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId, userId), '?g');
+    const labelGraphs = this.labelGraphsFor(agentId, userId);
+    const slg = this.graphValuesClause(labelGraphs, '?slg');
+    const plg = this.graphValuesClause(labelGraphs, '?plg');
+    const olg = this.graphValuesClause(labelGraphs, '?olg');
 
     try {
       const query = `
@@ -605,9 +678,9 @@ export class KnowledgeEngine {
         SELECT ?s ?sLabel ?p ?pLabel ?o ?oLabel WHERE {
           ${valuesG}
           GRAPH ?g { ?s ?p ?o . }
-          OPTIONAL { GRAPH ?slg { ?s rdfs:label ?sLabel } }
-          OPTIONAL { GRAPH ?plg { ?p rdfs:label ?pLabel } }
-          OPTIONAL { GRAPH ?olg { ?o rdfs:label ?oLabel } }
+          OPTIONAL { ${slg} GRAPH ?slg { ?s rdfs:label ?sLabel } }
+          OPTIONAL { ${plg} GRAPH ?plg { ?p rdfs:label ?pLabel } }
+          OPTIONAL { ${olg} GRAPH ?olg { ?o rdfs:label ?oLabel } }
           FILTER(?p != rdf:type)
           FILTER(?p != rdfs:label)
           FILTER(?p != rdfs:domain)
@@ -667,16 +740,18 @@ export class KnowledgeEngine {
 
     try {
       // Check the graph the fact would actually be written to; if no context
-      // is available, fall back to a graph-agnostic match so duplicates are
-      // still caught wherever the triple lives.
+      // is available, fall back to a match in the agent worldview.
       if (context) {
         const targetGraph = this.resolveTargetGraph(fact, context);
         return await this.triplestore.ask(
           `ASK { GRAPH ${sparqlIri(targetGraph)} { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
         );
       }
+      // No user is known here, so only the worldview is searched — never the
+      // private graph of any user.
+      const valuesG = this.graphValuesClause(this.knowledgeGraphsFor(agentId), '?g');
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
+        `ASK { ${valuesG} GRAPH ?g { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
       );
     } catch {
       return false;
@@ -693,10 +768,6 @@ export class KnowledgeEngine {
    */
   private static readonly SELF_ALIASES = new Set(['ontofelia', 'self']);
 
-  /** Subject names that denote the current user rather than a named person. */
-  private static readonly USER_ALIASES = new Set([
-    'user', 'me', 'i',
-  ]);
 
   /**
    * Normalized predicates that flag a user-stated agent fact as an
@@ -843,7 +914,7 @@ export class KnowledgeEngine {
   private canonicalUserUri(name: string, fact: FactInput, context: FactContext): string | null {
     if (!context.userId) return null;
     const lc = (name || '').trim().toLowerCase();
-    if (KnowledgeEngine.USER_ALIASES.has(lc)) {
+    if (isUserAliasSubject(lc)) {
       return this.userEntityUri(context.userId);
     }
     const fromUser = fact.sourceKind === 'user' || context.isOwner;
@@ -876,6 +947,95 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Recompute the inferred graph that belongs to `sourceGraph` (the worldview
+   * or one user's graph) from scratch: reason over its current triples (plus
+   * the worldview for a user graph) and replace that inferred graph with the
+   * result. The result is computed BEFORE the old graph is cleared, and a
+   * reasoner failure throws without touching anything.
+   *
+   * Used after a retraction (stale derivations must not survive) and by
+   * `rebuildInferredGraphs`. Returns the number of derived triples written.
+   */
+  async rebuildInferredGraphFor(agentId: string, sourceGraph: string): Promise<number> {
+    if (!this.reasoner) return 0;
+    const scope = GraphUriResolver.getInferenceScope(agentId, sourceGraph);
+    const inferredGraph = this.assertGraph(scope.inferredGraph);
+    const own = await this.readGraphTriples(sourceGraph);
+    // Everything in the scope but the source graph itself is context; the
+    // source graph's triples play the role of "the new facts".
+    const context = scope.aboxGraphs.filter(g => g !== sourceGraph);
+    const derived = (await this.reasoner.materialize(own, context, { strict: true }))
+      .filter(t => !KnowledgeEngine.isReasonerBuiltin(t));
+    await this.triplestore.update(`CLEAR SILENT GRAPH ${sparqlIri(inferredGraph)}`);
+    if (derived.length > 0) await this.triplestore.insertTriples(inferredGraph, derived);
+    return derived.length;
+  }
+
+  /**
+   * One-shot repair for deployments whose shared inferred graph mixes
+   * derivations from every user's private graph: clear the shared graph and
+   * every per-user inferred graph, then recompute the shared one from the
+   * worldview and each user's own from worldview + that user's graph.
+   * Never runs automatically.
+   */
+  async rebuildInferredGraphs(agentId: string): Promise<{ shared: number; perUser: Record<string, number> }> {
+    const userPrefix = `urn:${agentId}:user:`;
+    const res = await this.triplestore.query(
+      `SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } }`,
+    );
+    const graphs = res.type === 'bindings' && res.bindings
+      ? res.bindings.map(b => b.g?.value).filter((g): g is string => !!g)
+      : [];
+    // Stale per-user inferred graphs whose user graph is gone must be cleared too.
+    const inferredUserPrefix = `urn:${agentId}:inferred:user:`;
+    const userGraphs = graphs.filter(g => g.startsWith(userPrefix));
+    const orphans = graphs.filter(
+      g => g.startsWith(inferredUserPrefix)
+        && !userGraphs.includes(`${userPrefix}${g.slice(inferredUserPrefix.length)}`),
+    );
+    const shared = await this.rebuildInferredGraphFor(agentId, GraphUriResolver.getWorldviewGraph(agentId));
+    const perUser: Record<string, number> = {};
+    for (const g of userGraphs) {
+      perUser[g.slice(userPrefix.length)] = await this.rebuildInferredGraphFor(agentId, g);
+    }
+    for (const g of orphans) await this.triplestore.update(`CLEAR SILENT GRAPH ${sparqlIri(g)}`);
+    return { shared, perUser };
+  }
+
+  /** Reasoner built-ins (owl:Thing / owl:Nothing bookkeeping) are not derivations worth storing. */
+  private static isReasonerBuiltin(t: { subject: string; predicate: string; object: unknown }): boolean {
+    const OWL = 'http://www.w3.org/2002/07/owl#';
+    return t.subject === `${OWL}Thing` || t.subject === `${OWL}Nothing`
+      || (t.predicate === 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+        && typeof t.object === 'object' && t.object !== null
+        && (t.object as { value?: string }).value === `${OWL}Thing`);
+  }
+
+  /** All blank-node-free triples of a graph, as reasoner input. */
+  private async readGraphTriples(graph: string): Promise<Array<{
+    subject: string; predicate: string;
+    object: { type: 'uri'; value: string } | { type: 'literal'; value: string; language?: string };
+  }>> {
+    const res = await this.triplestore.query(
+      `SELECT ?s ?p ?o WHERE { GRAPH ${sparqlIri(graph)} { ?s ?p ?o } }`,
+    );
+    if (res.type !== 'bindings' || !res.bindings) return [];
+    const out = [];
+    for (const b of res.bindings) {
+      const s = b.s, p = b.p, o = b.o;
+      if (!s || !p || !o || s.type !== 'uri' || o.type === 'bnode') continue;
+      out.push({
+        subject: s.value,
+        predicate: p.value,
+        object: o.type === 'uri'
+          ? { type: 'uri' as const, value: o.value }
+          : { type: 'literal' as const, value: o.value, ...(o.language ? { language: o.language } : {}) },
+      });
+    }
+    return out;
+  }
+
+  /**
    * Route a fact to its correct Named Graph per the knowledge-graph concept.
    *
    * Important: urn:<agent>:self is WRITE-PROTECTED (concept §2 — "nur durch
@@ -900,8 +1060,7 @@ export class KnowledgeEngine {
   private resolveTargetGraph(fact: FactInput, context: FactContext): string {
     const fromUser = fact.sourceKind === 'user' || context.isOwner;
     if (fromUser && context.userId) {
-      const subjectLc = (fact.subject || '').trim().toLowerCase();
-      const isUserSubject = KnowledgeEngine.USER_ALIASES.has(subjectLc);
+      const isUserSubject = isUserAliasSubject(fact.subject);
       // A user EXPECTATION/REQUEST about the agent is re-anchored to the user
       // node, so it belongs in the per-user graph. A DESCRIPTIVE / identity fact
       // about the agent must NOT go there — it stays on the agent entity and
@@ -943,13 +1102,16 @@ export class KnowledgeEngine {
    *
    * The query is scoped to this agent's claims graph and ignores claims that
    * are already superseded/retracted/rejected — only currently accepted
-   * claims compete with the incoming fact.
+   * claims compete with the incoming fact. Only claims asserted in the graph
+   * the new fact is written to can compete: a fact in one user's graph never
+   * retires a claim (or deletes a triple) that lives in another graph.
    */
   private async findConflictingClaims(
     subjectUri: string,
     predicateUri: string,
     newObjectTriple: string,
     agentId: string,
+    targetGraph: string,
   ): Promise<Array<{ claimUri: string; objectTriple: string; assertedInGraph: string }>> {
     const claimsGraph = GraphUriResolver.getClaimsGraph(agentId);
     const sparql = `
@@ -962,6 +1124,7 @@ export class KnowledgeEngine {
                  core:claimObject     ?o ;
                  core:assertedInGraph ?g ;
                  core:status          "accepted" .
+          FILTER (?g = ${sparqlIri(targetGraph)})
         }
       }
     `;
@@ -974,6 +1137,7 @@ export class KnowledgeEngine {
         const oTerm = b['o'];
         const g = b['g']?.value;
         if (!claimUri || !oTerm || !g) continue;
+        if (g !== targetGraph) continue; // defence in depth: same graph only
         // Store-derived terms are re-validated, never trusted: a claim whose
         // object or graph cannot be rendered safely is skipped (and logged),
         // so it can neither be matched nor retired through generated text.
@@ -1003,10 +1167,14 @@ export class KnowledgeEngine {
    * a new value supersedes any existing value. Non-functional properties
    * (the default in OWL) are multi-valued: multiple values coexist.
    */
-  private async isFunctionalProperty(predicateUri: string): Promise<boolean> {
+  private async isFunctionalProperty(predicateUri: string, agentId: string): Promise<boolean> {
+    const valuesG = this.graphValuesClause(
+      [TBOX_GRAPH, GraphUriResolver.getSchemaGraph(agentId)],
+      '?g',
+    );
     try {
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { ${sparqlIri(predicateUri)} a <${OWL_FUNCTIONAL_PROPERTY}> } }`
+        `ASK { ${valuesG} GRAPH ?g { ${sparqlIri(predicateUri)} a <${OWL_FUNCTIONAL_PROPERTY}> } }`
       );
     } catch {
       // Conservative default: treat as non-functional (multi-valued)
@@ -1019,10 +1187,14 @@ export class KnowledgeEngine {
    * The claim object stays in the claims graph with status "superseded" so
    * the history is preserved (concept §4 — explainable change). A conflict
    * record is also written so the supersession is visible to monitoring.
+   * The old claim points forward to the claim that replaced it
+   * (core:supersededBy) and the Conflict names both sides, so history can be
+   * walked old → new: what replaced this, when, and why.
    */
   private async retireSupersededClaim(
     claim: { claimUri: string; objectTriple: string; assertedInGraph: string },
     agentId: string,
+    supersedingClaimUri: string,
   ): Promise<boolean> {
     const now = new Date().toISOString();
     const conflictsGraph = GraphUriResolver.getConflictsGraph(agentId);
@@ -1037,6 +1209,7 @@ export class KnowledgeEngine {
     let assertedGraphIri: string;
     let conflictsGraphIri: string;
     let conflictIri: string;
+    let supersedingIri: string;
     let baseTriple: string | undefined;
     let retired: { subject: string; predicate: string; object: { type: string; value: string; language?: string } } | undefined;
     try {
@@ -1044,6 +1217,7 @@ export class KnowledgeEngine {
       assertedGraphIri = sparqlIri(claim.assertedInGraph);
       conflictsGraphIri = sparqlIri(conflictsGraph);
       conflictIri = sparqlIri(conflictUri);
+      supersedingIri = sparqlIri(supersedingClaimUri);
 
       const claimDetails = await this.triplestore.query(`
         PREFIX core: <urn:shared:ontology#>
@@ -1087,7 +1261,8 @@ export class KnowledgeEngine {
       INSERT {
         GRAPH ?g {
           ${claimIri} core:status "superseded" .
-          ${claimIri} core:supersededAt "${now}" .
+          ${claimIri} core:supersededAt ${sparqlStringLiteral(now)}^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+          ${claimIri} core:supersededBy ${supersedingIri} .
         }
       }
       WHERE { GRAPH ?g { ${claimIri} core:status "accepted" . } }
@@ -1113,9 +1288,10 @@ export class KnowledgeEngine {
       if (this.reasoner && retired) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const stale = await this.reasoner.materialize([retired as any], claim.assertedInGraph);
+          const scope = GraphUriResolver.getInferenceScope(agentId, claim.assertedInGraph);
+          const stale = await this.reasoner.materialize([retired as any], scope.aboxGraphs);
           if (stale.length > 0) {
-            const inferredGraph = sparqlIri(GraphUriResolver.getInferredGraph(agentId));
+            const inferredGraph = sparqlIri(scope.inferredGraph);
             // Best-effort and per triple: a stale entailment that cannot be
             // rendered safely is skipped (logged), the rest are still removed.
             const rendered: string[] = [];
@@ -1148,6 +1324,7 @@ export class KnowledgeEngine {
           ${conflictIri} a core:Conflict ;
             core:conflictType "supersession" ;
             core:supersededClaim ${claimIri} ;
+            core:supersedingClaim ${supersedingIri} ;
             core:detectedAt "${now}" ;
             core:status "resolved" .
         }
@@ -1157,11 +1334,107 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Read-only preview of what `storeFact` would do with each fact: the graph it
+   * would land in, whether it is a duplicate, and which accepted claims it
+   * would supersede. Writes nothing: entities and predicates are resolved with
+   * the same lookups `storeFact` uses, minus the INSERTs — a predicate that does
+   * not exist yet is simply non-functional. Each fact is judged against the
+   * current store only, not against earlier facts of the same batch.
+   */
+  async previewFacts(facts: FactInput[], context: FactContext): Promise<FactPreview[]> {
+    const out: FactPreview[] = [];
+    for (const fact of facts) {
+      if (fact.sourceUri) assertValidEvidenceSourceUri(fact.sourceUri);
+      const targetGraph = this.assertGraph(this.resolveTargetGraph(fact, context));
+      if (await this.isDuplicate(fact, context.agentId, context)) {
+        out.push({ fact, targetGraph, duplicate: true, wouldSupersede: [] });
+        continue;
+      }
+      const scope = { agentId: context.agentId, userId: context.userId };
+      const subject = await this.lookupEntityUri(
+        fact.subject, fact.subjectType, targetGraph, this.canonicalSubjectUri(fact, context), scope,
+      );
+      const predicateUri = BUILTIN_NAMESPACES.some(ns => this.toPropertyUri(fact.predicate).startsWith(ns))
+        ? this.toPropertyUri(fact.predicate)
+        : (await this.findPropertyByLabel(fact.predicate, context.agentId)) ?? this.toPropertyUri(fact.predicate);
+      let objectTriple: string;
+      if (fact.objectType === 'literal' || !fact.objectType) {
+        objectTriple = sparqlStringLiteral(fact.object);
+      } else {
+        const obj = await this.lookupEntityUri(fact.object, fact.objectType, targetGraph, undefined, scope);
+        objectTriple = sparqlIri(obj.uri);
+      }
+      let wouldSupersede: string[] = [];
+      if (fact.status !== 'rejected' && await this.isFunctionalProperty(predicateUri, context.agentId)) {
+        const conflicting = await this.findConflictingClaims(
+          subject.uri, predicateUri, objectTriple, context.agentId, targetGraph,
+        );
+        wouldSupersede = conflicting.map(c => c.claimUri);
+      }
+      out.push({ fact, targetGraph, duplicate: false, wouldSupersede });
+    }
+    return out;
+  }
+
+  /**
+   * Read-only: does the agent's evidence graph already hold an evidence with
+   * exactly this `sourceUri` and `contentHash`? Used to detect unchanged
+   * documents before re-importing them.
+   */
+  async hasEvidence(agentId: string, sourceUri: string, contentHash: string): Promise<boolean> {
+    assertValidEvidenceSourceUri(sourceUri);
+    if (!/^sha256:[0-9a-f]{64}$/.test(contentHash)) {
+      throw new Error('Invalid contentHash: expected sha256:<64 hex>');
+    }
+    const evidenceGraph = this.assertGraph(GraphUriResolver.getEvidenceGraph(agentId));
+    const res = await this.triplestore.query(`
+      ASK { GRAPH ${sparqlIri(evidenceGraph)} {
+        ?e <urn:shared:ontology#sourceUri> ${sparqlIri(sourceUri)} ;
+           <urn:shared:ontology#contentHash> ${sparqlStringLiteral(contentHash)} .
+      } }
+    `);
+    return res.type === 'boolean' && res.boolean === true;
+  }
+
+  /**
+   * Read-only: the `sourceUri`s of the evidence behind each claim. A claim
+   * without document evidence maps to an empty list. Claim URIs must be IRIs.
+   */
+  async claimSourceUris(agentId: string, claimUris: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const c of claimUris) {
+      try {
+        sparqlIri(c);
+      } catch {
+        throw new Error('Invalid claim URI');
+      }
+      out.set(c, []);
+    }
+    if (claimUris.length === 0) return out;
+    const claimsGraph = this.assertGraph(GraphUriResolver.getClaimsGraph(agentId));
+    const evidenceGraph = this.assertGraph(GraphUriResolver.getEvidenceGraph(agentId));
+    const res = await this.triplestore.query(`
+      SELECT ?c ?u WHERE {
+        VALUES ?c { ${claimUris.map(c => sparqlIri(c)).join(' ')} }
+        GRAPH ${sparqlIri(claimsGraph)} { ?c <urn:shared:ontology#hasEvidence> ?e }
+        GRAPH ${sparqlIri(evidenceGraph)} { ?e <urn:shared:ontology#sourceUri> ?u }
+      }
+    `);
+    for (const row of res.bindings ?? []) {
+      out.get(row['c'].value)?.push(row['u'].value);
+    }
+    return out;
+  }
+
+  /**
    * Store a fact as real RDF triples in the ABox, with provenance.
    * Automatically resolves entities and properties (creating them if needed).
    * Skips storage if the exact triple already exists (duplicate detection).
    */
   async storeFact(fact: FactInput, context: FactContext): Promise<StoreResult> {
+    // A hostile sourceUri is rejected before any write (it becomes an IRI in the evidence).
+    if (fact.sourceUri) assertValidEvidenceSourceUri(fact.sourceUri);
+
     // Duplicate check — skip if triple already exists
     if (await this.isDuplicate(fact, context.agentId, context)) {
       return {
@@ -1201,7 +1474,8 @@ export class KnowledgeEngine {
     // we always pin the subject explicitly and the dedup key matches the write
     // key for every subject class (incl. a `self`-alias subject).
     const subjectCanonical = this.canonicalSubjectUri(fact, context);
-    const subject = await this.resolveEntity(fact.subject, fact.subjectType, targetGraph, subjectCanonical);
+    const scope = { agentId: context.agentId, userId: context.userId };
+    const subject = await this.resolveEntity(fact.subject, fact.subjectType, targetGraph, subjectCanonical, scope);
     if (subject.isNew) newEntities.push(subject.uri);
 
     // 2. Resolve property. A predicate that is new is registered in the
@@ -1218,7 +1492,7 @@ export class KnowledgeEngine {
       objectUri = fact.object;
       objectTriple = sparqlStringLiteral(fact.object);
     } else {
-    const obj = await this.resolveEntity(fact.object, fact.objectType, targetGraph);
+    const obj = await this.resolveEntity(fact.object, fact.objectType, targetGraph, undefined, scope);
     if (obj.isNew) newEntities.push(obj.uri);
     objectUri = obj.uri;
     objectTriple = sparqlIri(obj.uri);
@@ -1238,19 +1512,23 @@ export class KnowledgeEngine {
   // auditable. Without this step, "Anna wohnt in Köln, nicht Hamburg" would
   // leave both Köln and Hamburg in the graph forever.
   const supersededClaims: string[] = [];
+  // The superseding claim's URI is minted here, before the old claim is
+  // retired, so the old claim can point forward to it; createClaim below
+  // stores the claim under exactly this URI.
+  const newClaimUri = this.claimService.mintClaimUri();
   if (status === 'accepted') {
     // Only supersede when the predicate IS functional (owl:FunctionalProperty)
     // or there is a genuine logical contradiction. Multi-valued / time-
     // scopeable properties (worksAt, hasRole, memberOf, …) preserve all
     // values instead of collapsing to the last-ingested one. (#875)
-    const functional = await this.isFunctionalProperty(predicate.uri);
+    const functional = await this.isFunctionalProperty(predicate.uri, context.agentId);
     if (functional) {
       const conflicting = await this.findConflictingClaims(
-        subject.uri, predicate.uri, objectTriple, context.agentId,
+        subject.uri, predicate.uri, objectTriple, context.agentId, targetGraph,
       );
       if (conflicting.length > 0) {
         for (const c of conflicting) {
-          if (await this.retireSupersededClaim(c, context.agentId)) {
+          if (await this.retireSupersededClaim(c, context.agentId, newClaimUri)) {
             supersededClaims.push(c.claimUri);
           }
         }
@@ -1275,7 +1553,12 @@ export class KnowledgeEngine {
     };
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      inferredTriples = await this.reasoner.materialize([inputTriple as any], targetGraph);
+      // A private fact is reasoned over worldview + that user's graph; a
+      // worldview fact over the worldview alone (see getInferenceScope).
+      inferredTriples = await this.reasoner.materialize(
+        [inputTriple as any],
+        GraphUriResolver.getInferenceScope(context.agentId, targetGraph).aboxGraphs,
+      );
     } catch {
       // Reasoning is best-effort — never block ingestion if the reasoner trips.
     }
@@ -1304,7 +1587,7 @@ export class KnowledgeEngine {
   // AND on the subject being a USER_ALIAS, not merely on a canonical subject.
   // G1 (#1035): never materialize owl:sameAs between the agent entity and the
   // owner in either direction — guarded by `objectDenotesAgent` below.
-  const subjectIsUserAlias = KnowledgeEngine.USER_ALIASES.has((fact.subject || '').trim().toLowerCase());
+  const subjectIsUserAlias = isUserAliasSubject(fact.subject);
   if (status === 'accepted' && userCanonical && subjectIsUserAlias) {
     const predLc = fact.predicate.replace(/[-_\s]/g, '').toLowerCase();
     const NAME_PREDICATES = new Set(['name', 'hasname', 'fullname', 'firstname', 'lastname', 'vorname', 'nachname']);
@@ -1338,10 +1621,11 @@ export class KnowledgeEngine {
     }
   }
 
-  // 4c. Persist materialized inferences into urn:<agent>:inferred.
+  // 4c. Persist materialized inferences. Derivations from a user's private
+  // graph go to that user's own inferred graph, never the shared one.
   if (status === 'accepted' && inferredTriples.length > 0) {
     const inferredGraph = this.assertGraph(
-      GraphUriResolver.getInferredGraph(context.agentId),
+      GraphUriResolver.getInferenceScope(context.agentId, targetGraph).inferredGraph,
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await this.triplestore.insertTriples(inferredGraph, inferredTriples as any);
@@ -1351,10 +1635,12 @@ export class KnowledgeEngine {
     let evidenceUri: string | undefined;
     let evidenceGraph: string | undefined;
 
-    // Create Evidence if we have source text or message ID
-    if (fact.sourceSpan || fact.sourceMessageId) {
+    // Create Evidence if we have source text, a message ID or a source URI
+    if (fact.sourceSpan || fact.sourceMessageId || fact.sourceUri) {
       const evidence = await this.claimService.createEvidence(context.agentId, {
-        evidenceType: 'message-span',
+        evidenceType: fact.evidenceType ?? 'message-span',
+        sourceUri: fact.sourceUri,
+        contentHash: fact.contentHash,
         sourceMessageId: fact.sourceMessageId,
         sessionId: context.sessionId,
         channel: fact.channel,
@@ -1379,7 +1665,8 @@ export class KnowledgeEngine {
       claimsGraph,
       status,
       evidenceUri,
-      evidenceGraph
+      evidenceGraph,
+      newClaimUri,
     );
 
     return {
@@ -1390,62 +1677,6 @@ export class KnowledgeEngine {
       newEntities,
       newProperties,
       tripleCount: 1
-    };
-  }
-
-  /**
-   * Run consistency checks against the knowledge graph.
-   * Detects disjoint class violations and counts inferred triples.
-   */
-  async checkConsistency(_agentId: string): Promise<ConsistencyResult> {
-    const conflicts: Array<{ type: string; description: string; subjects: string[] }> = [];
-
-    // Check disjoint class violations
-    try {
-      const disjointQuery = `
-        PREFIX owl: <http://www.w3.org/2002/07/owl#>
-        SELECT DISTINCT ?s ?c1 ?c2 WHERE {
-          ?s a ?c1 .
-          ?s a ?c2 .
-          ?c1 owl:disjointWith ?c2 .
-          FILTER (?c1 != ?c2)
-        } LIMIT 50
-      `;
-      const res = await this.triplestore.query(disjointQuery);
-      if (res?.type === 'bindings' && res.bindings) {
-        for (const b of res.bindings) {
-          conflicts.push({
-            type: 'disjoint_violation',
-            description: `${b.s?.value} is both ${b.c1?.value} and ${b.c2?.value} which are disjoint`,
-            subjects: [b.s?.value || '']
-          });
-        }
-      }
-    } catch {
-      // Ignore query errors
-    }
-
-    // Count inferred triples (triples in default graph but not in any named graph)
-    let newInferences = 0;
-    try {
-      const countQuery = `
-        SELECT (COUNT(*) AS ?count) WHERE {
-          ?s ?p ?o .
-          FILTER NOT EXISTS { GRAPH ?g { ?s ?p ?o } }
-        }
-      `;
-      const res = await this.triplestore.query(countQuery);
-      if (res?.type === 'bindings' && res.bindings?.[0]) {
-        newInferences = parseInt(res.bindings[0].count?.value || '0', 10);
-      }
-    } catch {
-      // Ignore query errors
-    }
-
-    return {
-      consistent: conflicts.length === 0,
-      conflicts,
-      newInferences
     };
   }
 

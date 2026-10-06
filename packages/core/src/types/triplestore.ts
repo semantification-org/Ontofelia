@@ -34,6 +34,7 @@ export interface TriplestoreAdapter {
   healthCheck(): Promise<HealthResult>;
 
   // SPARQL Operations
+  /** `namedGraph`, when given, becomes the default graph for graph-less patterns of this query. */
   query(sparql: string, namedGraph?: string): Promise<SparqlResult>;
   update(sparql: string): Promise<void>;
 
@@ -49,7 +50,13 @@ export interface TriplestoreAdapter {
 
   // Export/Import
   exportDataset(format: RdfFormat): Promise<string>;
-  importDataset(data: string, format: RdfFormat): Promise<void>;
+  /**
+   * Import serialised RDF. Triple formats (turtle, jsonld, ntriples, rdfxml)
+   * carry no graph and require `graphUri`; without it the import is rejected,
+   * because the default graph is not read by graph-scoped queries. `trig`
+   * keeps the graphs named in the data.
+   */
+  importDataset(data: string, format: RdfFormat, graphUri?: string): Promise<void>;
 
   // Backup
   backup(targetDir: string): Promise<string>;

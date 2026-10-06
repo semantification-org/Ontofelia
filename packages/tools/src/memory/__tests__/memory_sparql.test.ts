@@ -19,14 +19,14 @@ describe('MemorySparqlTool Validation', () => {
   };
 
   it('allows valid SELECT query', async () => {
-    const query = 'SELECT ?s ?p ?o WHERE { ?s ?p ?o }';
+    const query = 'SELECT ?s ?p ?o WHERE { GRAPH <urn:test:worldview> { ?s ?p ?o } }';
     const res = await tool.execute({ query }, ctx);
     expect(res.success).toBe(true);
     expect(mockAdapter.query).toHaveBeenCalled();
   });
 
   it('allows valid ASK query', async () => {
-    const query = 'ASK { ?s ?p ?o }';
+    const query = 'ASK { GRAPH <urn:test:worldview> { ?s ?p ?o } }';
     const res = await tool.execute({ query }, ctx);
     expect(res.success).toBe(true);
     expect(mockAdapter.ask).toHaveBeenCalled();
@@ -60,11 +60,13 @@ describe('MemorySparqlTool Validation', () => {
     expect(res.error).toMatch(/SERVICE clauses are not allowed/i);
   });
 
-  it('falls back to regex and blocks modification when syntax is weird but modifying keyword is present', async () => {
-    // Syntax error in sparqljs, fallback to regex
+  it('does not run a query it cannot parse', async () => {
     const query = 'SYNTAXERROR BUT WITH INSERT';
     const res = await tool.execute({ query }, ctx);
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/blocked/i);
+    const select = await tool.execute({ query: 'SELECT garbage { GRAPH <urn:test:user:bob> ' }, ctx);
+    expect(select.success).toBe(false);
+    expect(mockAdapter.query).toHaveBeenCalledTimes(1);
   });
 });

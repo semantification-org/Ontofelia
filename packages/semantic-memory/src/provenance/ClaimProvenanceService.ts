@@ -1,11 +1,11 @@
 import { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
-import { FactInput, FactContext } from '../types.js';
+import { FactInput, FactContext, EvidenceType } from '../types.js';
 import { sparqlIri, sparqlStringLiteral } from '../utils/SparqlSyntax.js';
 
 export interface EvidenceInput {
-  evidenceType: 'message-span' | 'tool-result' | 'document' | 'web-source' | 'manual-review';
+  evidenceType: EvidenceType;
   sourceMessageId?: string;
   sessionId?: string;
   channel?: string;
@@ -13,6 +13,18 @@ export interface EvidenceInput {
   rawText?: string;
   sourceUri?: string;
   contentHash?: string;
+}
+
+/**
+ * sourceUri is written as an IRI (<...>): reject anything that could close it
+ * or inject triples. Throws before any write.
+ */
+export function assertValidEvidenceSourceUri(sourceUri: string): void {
+  try {
+    sparqlIri(sourceUri);
+  } catch {
+    throw new Error('Invalid sourceUri for evidence: contains characters not allowed in an IRI');
+  }
 }
 
 export class ClaimProvenanceService {
@@ -59,6 +71,7 @@ export class ClaimProvenanceService {
       triples += `\n${subj} <${ONT}rawText> ${sparqlStringLiteral(input.rawText)} .`;
     }
     if (input.sourceUri) {
+      assertValidEvidenceSourceUri(input.sourceUri);
       triples += `\n${subj} <${ONT}sourceUri> ${sparqlIri(input.sourceUri)} .`;
     }
     if (input.contentHash) {
@@ -77,6 +90,11 @@ export class ClaimProvenanceService {
     return { uri, graph: evidenceGraph };
   }
 
+  /** Mints a fresh claim URI, so a caller can reference a claim before it is stored. */
+  mintClaimUri(): string {
+    return `urn:claim:${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
   /**
    * Creates a core:Claim and stores it in the provided claimsGraph.
    */
@@ -90,16 +108,16 @@ export class ClaimProvenanceService {
     claimGraph: string,
     status: 'accepted' | 'rejected' | 'superseded',
     evidenceUri?: string,
-    evidenceGraph?: string
+    evidenceGraph?: string,
+    claimUri?: string,
   ): Promise<string> {
     // The claim object lands in claimGraph; the asserted/target graph is
     // recorded as a property value. Both must be whitelisted.
     this.graphRegistry.assertWritable(claimGraph);
     this.graphRegistry.assertWritable(targetGraph);
 
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const uri = `urn:claim:${id}`;
-    
+    const uri = claimUri ?? this.mintClaimUri();
+
     // Fallback confidence mapping
     const confLabel = fact.confidenceLabel || 'medium';
     let confNum = fact.confidenceNumeric;

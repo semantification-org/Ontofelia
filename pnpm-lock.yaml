@@ -478,10 +478,19 @@ importers:
       '@ontofelia/reasoner':
         specifier: link:../reasoner
         version: link:../reasoner
+      js-yaml:
+        specifier: ^4.1.1
+        version: 4.1.1
       oxigraph:
         specifier: ^0.5.8
         version: 0.5.8
+      sparqljs:
+        specifier: ^3.7.4
+        version: 3.7.4
     devDependencies:
+      '@types/sparqljs':
+        specifier: ^3.1.12
+        version: 3.1.12
       typescript:
         specifier: ~5.7.0
         version: 5.7.3

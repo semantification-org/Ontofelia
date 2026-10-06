@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
-import { GraphUriResolver, sparqlIri } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, SHARED_GRAPHS, sparqlIri } from '@ontofelia/semantic-memory';
 
 /** Claim/Evidence vocabulary namespace (see knowledge-graph-concept.md §4). */
 const CLAIM_NS = 'urn:shared:ontology#';
@@ -48,19 +48,44 @@ export class MemoryExplainTool implements ToolDefinition {
     }
     // Provenance is modelled as core:Claim objects in the claims graph; the
     // raw source text lives in the evidence graph (linked via hasEvidence).
+    // Labels come from the worldview, the acting user's own graph, the shared
+    // ontology and the schema graph — never from another user's graph.
+    // Claims are restricted to those asserted in the worldview or the acting
+    // user's own graph (a rejected claim records its graph as targetGraph).
+    const factGraphs = [
+      GraphUriResolver.getWorldviewGraph(context.agentId),
+      ...(context.senderId ? [GraphUriResolver.getUserGraph(context.agentId, context.senderId)] : []),
+    ];
+    const labelGraphs = [
+      ...factGraphs,
+      SHARED_GRAPHS.ONTOLOGY,
+      GraphUriResolver.getSchemaGraph(context.agentId),
+    ];
+    // Every graph IRI is validated (the user graph embeds the sender id).
+    let claimGraphValues: string;
+    let labelValues: string;
+    try {
+      claimGraphValues = `VALUES ?ag { ${factGraphs.map((g) => sparqlIri(g)).join(' ')} }`;
+      labelValues = `VALUES ?g { ${labelGraphs.map((g) => sparqlIri(g)).join(' ')} }`;
+    } catch (e) {
+      return this.fail(data, start, (e as Error).message);
+    }
 
     const sparql = `
       PREFIX claim: <${CLAIM_NS}>
       PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT ?predicate ?predicateLabel ?object ?status ?confidence ?confidenceLabel
              ?sourceKind ?learnedAt ?sourceSpan ?evidence ?evidenceGraph
+             ?supersededAt ?supersededBy ?supersededByObject
       WHERE {
+        ${claimGraphValues}
         GRAPH ${claimsGraphIri} {
           ?claim a claim:Claim ;
                  claim:claimSubject   ${entityIri} ;
                  claim:claimPredicate ?predicate ;
                  claim:claimObject    ?object ;
-                 claim:status         ?status .
+                 claim:status         ?status ;
+                 (claim:assertedInGraph|claim:targetGraph) ?ag .
           OPTIONAL { ?claim claim:confidence      ?confidence . }
           OPTIONAL { ?claim claim:confidenceLabel ?confidenceLabel . }
           OPTIONAL { ?claim claim:sourceKind      ?sourceKind . }
@@ -68,8 +93,16 @@ export class MemoryExplainTool implements ToolDefinition {
           OPTIONAL { ?claim claim:sourceSpan      ?sourceSpan . }
           OPTIONAL { ?claim claim:hasEvidence     ?evidence . }
           OPTIONAL { ?claim claim:evidenceGraph   ?evidenceGraph . }
+          OPTIONAL { ?claim claim:supersededAt    ?supersededAt . }
+          # The replacement is shown only when it lives in a graph the caller
+          # may read (?ag is already restricted above).
+          OPTIONAL {
+            ?claim claim:supersededBy ?supersededBy .
+            ?supersededBy claim:claimObject ?supersededByObject ;
+                          (claim:assertedInGraph|claim:targetGraph) ?ag .
+          }
         }
-        OPTIONAL { GRAPH ?g { ?predicate rdfs:label ?predicateLabel } }
+        OPTIONAL { ${labelValues} GRAPH ?g { ?predicate rdfs:label ?predicateLabel } }
       }
       ORDER BY DESC(?learnedAt)`;
 
@@ -89,7 +122,13 @@ export class MemoryExplainTool implements ToolDefinition {
             learnedAt: b.learnedAt?.value,
             sourceSpan: b.sourceSpan?.value,
             evidence: b.evidence?.value,
-            evidenceGraph: b.evidenceGraph?.value
+            evidenceGraph: b.evidenceGraph?.value,
+            supersededAt: b.supersededAt?.value,
+            supersededBy: b.supersededBy?.value,
+            supersededByObject: b.supersededByObject?.value,
+            explanation: b.status?.value === 'superseded'
+              ? `superseded${b.supersededByObject ? ` by ${b.supersededByObject.value}` : ''}${b.supersededAt ? ` at ${b.supersededAt.value}` : ''}`
+              : undefined
           });
         }
       }
