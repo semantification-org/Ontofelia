@@ -1,5 +1,6 @@
 import { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
+import { escapeSparqlStringContent } from '../utils/SparqlSyntax.js';
 
 export interface ReasoningConflict {
   type: 'disjoint_violation' | 'inconsistency' | 'range_violation' | 'domain_violation' | 'claim_clash';
@@ -140,7 +141,7 @@ export class ConflictDetector {
 
     for (const [index, conflict] of conflicts.entries()) {
       const conflictUri = `urn:ontofelia:conflict:${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`;
-      const desc = conflict.description.replace(/"/g, '\\"');
+      const desc = escapeSparqlStringContent(conflict.description);
       const lines = [
         `<${conflictUri}> a <${CORE_NS}Conflict> .`,
         `<${conflictUri}> <${CORE_NS}conflictType> "${conflict.type}" .`,

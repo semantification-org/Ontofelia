@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { TriplestoreAdapter, TriplestoreConfig, SparqlResult, RdfFormat, Triple, HealthResult } from '@ontofelia/core';
+import { sparqlStringLiteral } from '../utils/SparqlSyntax.js';
 
 export class FusekiAdapter implements TriplestoreAdapter {
   readonly backend = 'fuseki';
@@ -133,14 +134,14 @@ export class FusekiAdapter implements TriplestoreAdapter {
       if (obj.startsWith('http://') || obj.startsWith('https://') || obj.startsWith('urn:')) {
         return `<${obj}>`;
       }
-      return `"${obj.replace(/"/g, '\\"')}"`; // Simple literal string
+      return sparqlStringLiteral(obj); // Simple literal string
     }
     
     if (obj.type === 'uri') {
       return `<${obj.value}>`;
     }
     
-    let literal = `"${obj.value.replace(/"/g, '\\"')}"`;
+    let literal = sparqlStringLiteral(obj.value);
     if (obj.language) {
       literal += `@${obj.language}`;
     }

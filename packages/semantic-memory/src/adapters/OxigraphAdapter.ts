@@ -4,6 +4,7 @@ import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { sparqlStringLiteral } from '../utils/SparqlSyntax.js';
 
 /**
  * Adapter for the embedded Oxigraph triplestore.
@@ -198,14 +199,14 @@ export class OxigraphAdapter implements TriplestoreAdapter {
       if (obj.startsWith('http://') || obj.startsWith('https://') || obj.startsWith('urn:')) {
         return `<${obj}>`;
       }
-      return `"${obj.replace(/"/g, '\\"')}"`;
+      return sparqlStringLiteral(obj);
     }
 
     if (obj.type === 'uri') {
       return `<${obj.value}>`;
     }
 
-    let literal = `"${obj.value.replace(/"/g, '\\"')}"`;
+    let literal = sparqlStringLiteral(obj.value);
     if (obj.language) {
       literal += `@${obj.language}`;
     }

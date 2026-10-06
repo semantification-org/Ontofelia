@@ -5,6 +5,7 @@ import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
 import { ClaimProvenanceService } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
+import { escapeSparqlStringContent } from './utils/SparqlSyntax.js';
 import { FactInput, FactContext, StoreResult, ConsistencyResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
@@ -187,7 +188,7 @@ export class KnowledgeEngine {
 
   /** Escape a string for use in a SPARQL literal */
   private escapeLiteral(s: string): string {
-    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    return escapeSparqlStringContent(s);
   }
 
   /**

@@ -17,7 +17,8 @@ const ECHAR: Record<string, string> = {
 };
 
 /**
- * Returns `value` as a complete double-quoted SPARQL string literal ("...").
+ * Returns the escaped inner part of a SPARQL string literal (no surrounding
+ * quotes); `sparqlStringLiteral` wraps it in double quotes.
  *
  * - Backslash, double quote, LF, CR, TAB, BS and FF use the ECHAR escapes.
  * - Every other C0 control character (U+0000-U+001F) and every lone UTF-16
@@ -26,31 +27,36 @@ const ECHAR: Record<string, string> = {
  *   would not be a faithful, parser-independent encoding of the character.
  *   Such characters therefore do not round-trip; all other text does.
  */
-export function sparqlStringLiteral(value: string): string {
+export function escapeSparqlStringContent(value: string): string {
   const s = String(value);
-  let out = '"';
+  let out = '';
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     const code = s.charCodeAt(i);
     if (ECHAR[ch] !== undefined) {
       out += ECHAR[ch];
     } else if (code < 0x20) {
-      out += '�';
+      out += '\uFFFD';
     } else if (code >= 0xd800 && code <= 0xdbff) {
       const next = s.charCodeAt(i + 1);
       if (next >= 0xdc00 && next <= 0xdfff) {
         out += ch + s[i + 1];
         i++;
       } else {
-        out += '�';
+        out += '\uFFFD';
       }
     } else if (code >= 0xdc00 && code <= 0xdfff) {
-      out += '�';
+      out += '\uFFFD';
     } else {
       out += ch;
     }
   }
-  return out + '"';
+  return out;
+}
+
+/** Returns `value` as a complete double-quoted SPARQL string literal ("..."). */
+export function sparqlStringLiteral(value: string): string {
+  return '"' + escapeSparqlStringContent(value) + '"';
 }
 
 // IRIREF excludes <>"{}|^`\ and U+0000-U+0020; DEL and C1 controls are

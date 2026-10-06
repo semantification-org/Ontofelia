@@ -15,6 +15,7 @@
 
 import type { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
+import { escapeSparqlStringContent } from '../utils/SparqlSyntax.js';
 
 const COGT = 'urn:shared:ontology#cog/';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -60,12 +61,7 @@ export interface SeedConstraint {
 }
 
 function escapeLiteral(s: string): string {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\t/g, '\\t');
+  return escapeSparqlStringContent(s);
 }
 
 export class SelfModel {
