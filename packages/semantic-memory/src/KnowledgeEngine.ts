@@ -1053,12 +1053,32 @@ export class KnowledgeEngine {
    *   - Agent/tool-derived facts
    *       → urn:<agent>:worldview
    *
+   * Non-owner context (`userId` set, `isOwner` false) — privacy rule:
+   *   1. A fact whose subject is a user alias goes to that user's graph,
+   *      whatever its `sourceKind`.
+   *   2. A fact whose `sourceKind` is not `user` (agent, tool, missing, …) also
+   *      goes to that user's graph. The source is chosen by the model, so it
+   *      must never open a path from a non-owner's session into the shared
+   *      worldview.
+   *   3. Only a non-owner's `sourceKind: 'user'` third-party / world facts
+   *      reach the worldview (the user stated them about others), as does
+   *      everything in a context without `userId`. The owner context and the
+   *      agent-expectation re-anchoring are unchanged, and the self graph is
+   *      never a target.
+   *
    * Before this fix, every user-asserted fact landed in the user graph and
    * the worldview graph was dead. That violated the concept and made Anna
    * indistinguishable from Alice at the storage layer.
    */
   private resolveTargetGraph(fact: FactInput, context: FactContext): string {
     const fromUser = fact.sourceKind === 'user' || context.isOwner;
+    if (context.userId && !context.isOwner) {
+      // Non-owner: a self-fact, or any fact the model attributes to a non-user
+      // source, stays private to this user (never the shared worldview).
+      if (isUserAliasSubject(fact.subject) || fact.sourceKind !== 'user') {
+        return GraphUriResolver.getUserGraph(context.agentId, context.userId);
+      }
+    }
     if (fromUser && context.userId) {
       const isUserSubject = isUserAliasSubject(fact.subject);
       // A user EXPECTATION/REQUEST about the agent is re-anchored to the user

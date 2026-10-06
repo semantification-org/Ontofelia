@@ -217,7 +217,7 @@ describe('claim supersession and clashes stay inside one graph', () => {
 
   const aliceLivesIn = (place: string) => engine.storeFact(
     { subject: 'Anna', subjectType: 'Person', predicate: 'livesIn', object: place,
-      objectType: 'Place', sourceKind: 'agent' },
+      objectType: 'Place', sourceKind: 'user' },
     aliceCtx,
   );
 

@@ -31,7 +31,7 @@ const countAll = async (): Promise<number> =>
   Number((await rows('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }'))[0].n.value);
 
 const fact = (predicate: string, object: string, extra: Partial<FactInput> = {}): FactInput => ({
-  subject: 'Anna', subjectType: 'Person', predicate, object, objectType: 'Place', sourceKind: 'tool', ...extra,
+  subject: 'Anna', subjectType: 'Person', predicate, object, objectType: 'Place', sourceKind: 'user', ...extra,
 });
 
 beforeEach(async () => {
