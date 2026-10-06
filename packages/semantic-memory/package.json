@@ -22,6 +22,7 @@
   "dependencies": {
     "@ontofelia/core": "workspace:*",
     "@ontofelia/reasoner": "link:../reasoner",
+    "js-yaml": "^4.1.1",
     "oxigraph": "^0.5.8",
     "sparqljs": "^3.7.4"
   },

@@ -1310,6 +1310,52 @@ export class KnowledgeEngine {
   }
 
   /**
+   * Read-only: does the agent's evidence graph already hold an evidence with
+   * exactly this `sourceUri` and `contentHash`? Used to detect unchanged
+   * documents before re-importing them.
+   */
+  async hasEvidence(agentId: string, sourceUri: string, contentHash: string): Promise<boolean> {
+    assertValidEvidenceSourceUri(sourceUri);
+    if (!/^sha256:[0-9a-f]{64}$/.test(contentHash)) {
+      throw new Error('Invalid contentHash: expected sha256:<64 hex>');
+    }
+    const evidenceGraph = this.assertGraph(GraphUriResolver.getEvidenceGraph(agentId));
+    const res = await this.triplestore.query(`
+      ASK { GRAPH <${evidenceGraph}> {
+        ?e <urn:shared:ontology#sourceUri> <${sourceUri}> ;
+           <urn:shared:ontology#contentHash> "${this.escapeLiteral(contentHash)}" .
+      } }
+    `);
+    return res.type === 'boolean' && res.boolean === true;
+  }
+
+  /**
+   * Read-only: the `sourceUri`s of the evidence behind each claim. A claim
+   * without document evidence maps to an empty list. Claim URIs must be IRIs.
+   */
+  async claimSourceUris(agentId: string, claimUris: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const c of claimUris) {
+      if (/[\u0000-\u0020<>"{}|\\^`]/.test(c) || !c) throw new Error('Invalid claim URI');
+      out.set(c, []);
+    }
+    if (claimUris.length === 0) return out;
+    const claimsGraph = this.assertGraph(GraphUriResolver.getClaimsGraph(agentId));
+    const evidenceGraph = this.assertGraph(GraphUriResolver.getEvidenceGraph(agentId));
+    const res = await this.triplestore.query(`
+      SELECT ?c ?u WHERE {
+        VALUES ?c { ${claimUris.map(c => `<${c}>`).join(' ')} }
+        GRAPH <${claimsGraph}> { ?c <urn:shared:ontology#hasEvidence> ?e }
+        GRAPH <${evidenceGraph}> { ?e <urn:shared:ontology#sourceUri> ?u }
+      }
+    `);
+    for (const row of res.bindings ?? []) {
+      out.get(row['c'].value)?.push(row['u'].value);
+    }
+    return out;
+  }
+
+  /**
    * Store a fact as real RDF triples in the ABox, with provenance.
    * Automatically resolves entities and properties (creating them if needed).
    * Skips storage if the exact triple already exists (duplicate detection).

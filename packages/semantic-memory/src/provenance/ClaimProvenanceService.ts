@@ -59,7 +59,7 @@ export class ClaimProvenanceService {
       triples += `\n<${uri}> <urn:shared:ontology#actor> <${input.actorUri}> .`;
     }
     if (input.rawText) {
-      const escapedText = input.rawText.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n');
+      const escapedText = input.rawText.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
       triples += `\n<${uri}> <urn:shared:ontology#rawText> "${escapedText}" .`;
     }
     if (input.sourceUri) {
@@ -151,7 +151,7 @@ export class ClaimProvenanceService {
       triples += `\n<${uri}> <urn:shared:ontology#sessionId> "${context.sessionId}" .`;
     }
     if (fact.sourceSpan) {
-      const escapedText = fact.sourceSpan.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n');
+      const escapedText = fact.sourceSpan.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
       triples += `\n<${uri}> <urn:shared:ontology#sourceSpan> "${escapedText}" .`;
     }
 
