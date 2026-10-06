@@ -182,9 +182,16 @@ describe('Gateway auth decides on the matched route', () => {
       expect([400, 401]).toContain(res.statusCode);
       expect(res.body).not.toContain('"running"');
     });
-    it('unknown non-API paths are not gated and answer 404', async () => {
+    it('unknown non-API paths are not gated (404, or the web UI when it is built)', async () => {
       const res = await fastify.inject({ method: 'GET', url: '/nothing-here' });
-      expect(res.statusCode).toBe(404);
+      expect(res.statusCode).not.toBe(401);
+      expect(res.body).not.toContain('Unauthorized');
+      if (res.statusCode === 200) {
+        // Web UI built: the not-found handler serves the SPA shell.
+        expect(String(res.headers['content-type'])).toContain('text/html');
+      } else {
+        expect(res.statusCode).toBe(404);
+      }
     });
   });
 
