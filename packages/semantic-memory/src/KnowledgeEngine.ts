@@ -5,7 +5,8 @@ import { ReasonableEngine } from './reasoning/ReasonableEngine.js';
 import { ClaimProvenanceService } from './provenance/ClaimProvenanceService.js';
 import { GraphUriResolver, SHARED_GRAPHS } from './utils/GraphUriResolver.js';
 import { GraphRegistry } from './utils/GraphRegistry.js';
-import { escapeSparqlStringContent } from './utils/SparqlSyntax.js';
+import { escapeSparqlStringContent, sparqlIri, sparqlStringLiteral } from './utils/SparqlSyntax.js';
+import { sparqlTripleLine } from './utils/TripleSyntax.js';
 import { FactInput, FactContext, StoreResult, ConsistencyResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
@@ -18,6 +19,27 @@ const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
 // concurrent re-seeds (e.g. the HTTP endpoint and the /reseed-persona command)
 // never share — and thus never DROP — each other's staging graph.
 let reseedTmpSeq = 0;
+
+/** Reject a URI that could end or alter an IRIREF token; the message keeps the historical prefix. */
+function assertSafeUri(uri: string): void {
+  try {
+    sparqlIri(uri);
+  } catch {
+    throw new Error('Invalid URI: contains a character that is not allowed in an IRI reference');
+  }
+}
+
+/**
+ * Render a value that is interpolated as a bare SPARQL integer (LIMIT).
+ * Anything that is not a non-negative safe integer is rejected, never coerced
+ * into query text.
+ */
+function sparqlCount(n: number): string {
+  if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) {
+    throw new Error(`Invalid integer for SPARQL: ${JSON.stringify(String(n).slice(0, 40))}`);
+  }
+  return String(n);
+}
 
 /**
  * Thrown by {@link KnowledgeEngine.reseedSelf} when the post-apply tripwire
@@ -133,8 +155,7 @@ export class KnowledgeEngine {
   /** Convert a human-readable name to an entity URI */
   private toEntityUri(name: string): string {
     if (name.startsWith('urn:') || name.startsWith('http://') || name.startsWith('https://')) {
-      // Very basic validation to prevent > injection in absolute URIs
-      if (name.includes('>')) throw new Error('Invalid URI: cannot contain ">"');
+      assertSafeUri(name);
       return name;
     }
     const normalized = encodeURIComponent(name.trim().replace(/\s+/g, '_'));
@@ -156,7 +177,7 @@ export class KnowledgeEngine {
    */
   private toPropertyUri(name: string): string {
     if (name.startsWith('urn:') || name.startsWith('http://') || name.startsWith('https://')) {
-      if (name.includes('>')) throw new Error('Invalid URI: cannot contain ">"');
+      assertSafeUri(name);
       return name;
     }
     // Funnel relational predicates onto canonical RDF/RDFS/OWL vocabulary so the
@@ -183,7 +204,9 @@ export class KnowledgeEngine {
 
   /** Map a type name to its OWL class URI */
   private typeToClassUri(type: string): string {
-    return `${CORE_NS}${type}`;
+    const uri = `${CORE_NS}${type}`;
+    sparqlIri(uri); // the type name is model-supplied text: validate it
+    return uri;
   }
 
   /** Escape a string for use in a SPARQL literal */
@@ -268,7 +291,7 @@ export class KnowledgeEngine {
    */
   private async mintDisambiguatedUri(name: string, type?: string): Promise<string> {
     const base = this.toEntityUri(name);
-    const isTaken = (u: string) => this.triplestore.ask(`ASK { GRAPH ?g { <${u}> a ?t } }`);
+    const isTaken = (u: string) => this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(u)} a ?t } }`);
     if (!(await isTaken(base))) return base;
 
     const suffix = type ? '_' + encodeURIComponent(type.trim().replace(/\s+/g, '_')) : '';
@@ -313,7 +336,7 @@ export class KnowledgeEngine {
     }
 
     // Check if entity already exists anywhere
-    const exists = await this.triplestore.ask(`ASK { GRAPH ?g { <${uri}> a ?type } }`);
+    const exists = await this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
 
     if (!exists && type) {
       const classUri = this.typeToClassUri(type);
@@ -322,9 +345,9 @@ export class KnowledgeEngine {
       await this.triplestore.update(`
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         INSERT DATA {
-          GRAPH <${graph}> {
-            <${uri}> a <${classUri}> .
-            <${uri}> rdfs:label "${this.escapeLiteral(name)}" .
+          GRAPH ${sparqlIri(graph)} {
+            ${sparqlIri(uri)} a ${sparqlIri(classUri)} .
+            ${sparqlIri(uri)} rdfs:label ${sparqlStringLiteral(name)} .
           }
         }
       `);
@@ -363,7 +386,7 @@ export class KnowledgeEngine {
               { ?p a rdf:Property }
             }
           } UNION {
-            GRAPH <${schemaGraph}> {
+            GRAPH ${sparqlIri(schemaGraph)} {
               ?p a rdf:Property ; rdfs:label ?l .
             }
           }
@@ -417,16 +440,16 @@ export class KnowledgeEngine {
     if (labelMatch) return { uri: labelMatch, isNew: false };
 
     // 2. Known if defined in any graph — shared TBox or any agent schema graph.
-    const isKnown = await this.triplestore.ask(`ASK { GRAPH ?g { <${uri}> a ?type } }`);
+    const isKnown = await this.triplestore.ask(`ASK { GRAPH ?g { ${sparqlIri(uri)} a ?type } }`);
     if (isKnown) return { uri, isNew: false };
 
     // 3. Register the new predicate in the agent-local schema graph.
     const schemaGraph = this.assertGraph(GraphUriResolver.getSchemaGraph(agentId));
     await this.triplestore.update(`
       INSERT DATA {
-        GRAPH <${schemaGraph}> {
-          <${uri}> a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
-          <${uri}> <http://www.w3.org/2000/01/rdf-schema#label> "${this.escapeLiteral(name)}" .
+        GRAPH ${sparqlIri(schemaGraph)} {
+          ${sparqlIri(uri)} a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+          ${sparqlIri(uri)} <http://www.w3.org/2000/01/rdf-schema#label> ${sparqlStringLiteral(name)} .
         }
       }
     `);
@@ -497,7 +520,7 @@ export class KnowledgeEngine {
 
   /** Build a SPARQL `VALUES ?var { <g1> <g2> … }` clause over graph URIs. */
   private graphValuesClause(graphs: string[], varName = '?g'): string {
-    return `VALUES ${varName} { ${graphs.map((g) => `<${g}>`).join(' ')} }`;
+    return `VALUES ${varName} { ${graphs.map((g) => sparqlIri(g)).join(' ')} }`;
   }
 
   /**
@@ -525,19 +548,19 @@ export class KnowledgeEngine {
           SELECT ?pred ?predLabel ?other ?otherLabel ?direction WHERE {
             ${valuesG}
             {
-              GRAPH ?g { <${entityUri}> ?pred ?other . }
+              GRAPH ?g { ${sparqlIri(entityUri)} ?pred ?other . }
               BIND("out" AS ?direction)
               FILTER(?pred != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
               FILTER(?pred != <http://www.w3.org/2000/01/rdf-schema#label>)
             } UNION {
-              GRAPH ?g { ?other ?pred <${entityUri}> . }
+              GRAPH ?g { ?other ?pred ${sparqlIri(entityUri)} . }
               BIND("in" AS ?direction)
               FILTER(?pred != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
             }
             OPTIONAL { GRAPH ?plg { ?pred rdfs:label ?predLabel } }
             OPTIONAL { GRAPH ?olg { ?other rdfs:label ?otherLabel } }
           }
-          LIMIT ${limit - facts.length}
+          LIMIT ${sparqlCount(limit - facts.length)}
         `;
         const res = await this.triplestore.query(query);
         if (res?.type === 'bindings' && res.bindings) {
@@ -591,7 +614,7 @@ export class KnowledgeEngine {
           FILTER(?p != rdfs:range)
           FILTER(?p != owl:sameAs)
         }
-        LIMIT ${limit}
+        LIMIT ${sparqlCount(limit)}
       `;
 
       const res = await this.triplestore.query(query);
@@ -637,9 +660,9 @@ export class KnowledgeEngine {
 
     let objectClause: string;
     if (fact.objectType === 'literal' || !fact.objectType) {
-      objectClause = `"${this.escapeLiteral(fact.object)}"`;
+      objectClause = sparqlStringLiteral(fact.object);
     } else {
-      objectClause = `<${this.toEntityUri(fact.object)}>`;
+      objectClause = sparqlIri(this.toEntityUri(fact.object));
     }
 
     try {
@@ -649,11 +672,11 @@ export class KnowledgeEngine {
       if (context) {
         const targetGraph = this.resolveTargetGraph(fact, context);
         return await this.triplestore.ask(
-          `ASK { GRAPH <${targetGraph}> { <${subjectUri}> <${predicateUri}> ${objectClause} } }`
+          `ASK { GRAPH ${sparqlIri(targetGraph)} { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
         );
       }
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { <${subjectUri}> <${predicateUri}> ${objectClause} } }`
+        `ASK { GRAPH ?g { ${sparqlIri(subjectUri)} ${sparqlIri(predicateUri)} ${objectClause} } }`
       );
     } catch {
       return false;
@@ -932,10 +955,10 @@ export class KnowledgeEngine {
     const sparql = `
       PREFIX core: <urn:shared:ontology#>
       SELECT ?claim ?o ?g WHERE {
-        GRAPH <${claimsGraph}> {
+        GRAPH ${sparqlIri(claimsGraph)} {
           ?claim a core:Claim ;
-                 core:claimSubject    <${subjectUri}> ;
-                 core:claimPredicate  <${predicateUri}> ;
+                 core:claimSubject    ${sparqlIri(subjectUri)} ;
+                 core:claimPredicate  ${sparqlIri(predicateUri)} ;
                  core:claimObject     ?o ;
                  core:assertedInGraph ?g ;
                  core:status          "accepted" .
@@ -951,8 +974,20 @@ export class KnowledgeEngine {
         const oTerm = b['o'];
         const g = b['g']?.value;
         if (!claimUri || !oTerm || !g) continue;
-        const oTriple = oTerm.type === 'uri' ? `<${oTerm.value}>`
-          : `"${this.escapeLiteral(oTerm.value)}"`;
+        // Store-derived terms are re-validated, never trusted: a claim whose
+        // object or graph cannot be rendered safely is skipped (and logged),
+        // so it can neither be matched nor retired through generated text.
+        let oTriple: string;
+        try {
+          sparqlIri(claimUri);
+          sparqlIri(g);
+          oTriple = oTerm.type === 'uri' ? sparqlIri(oTerm.value) : sparqlStringLiteral(oTerm.value);
+        } catch (err) {
+          console.warn(
+            `[KnowledgeEngine] skipping stored claim with an unsafe term: ${(err as Error).message}`,
+          );
+          continue;
+        }
         if (oTriple === newObjectTriple) continue; // not a conflict — same fact
         out.push({ claimUri, objectTriple: oTriple, assertedInGraph: g });
       }
@@ -971,7 +1006,7 @@ export class KnowledgeEngine {
   private async isFunctionalProperty(predicateUri: string): Promise<boolean> {
     try {
       return await this.triplestore.ask(
-        `ASK { GRAPH ?g { <${predicateUri}> a <${OWL_FUNCTIONAL_PROPERTY}> } }`
+        `ASK { GRAPH ?g { ${sparqlIri(predicateUri)} a <${OWL_FUNCTIONAL_PROPERTY}> } }`
       );
     } catch {
       // Conservative default: treat as non-functional (multi-valued)
@@ -988,91 +1023,119 @@ export class KnowledgeEngine {
   private async retireSupersededClaim(
     claim: { claimUri: string; objectTriple: string; assertedInGraph: string },
     agentId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const now = new Date().toISOString();
     const conflictsGraph = GraphUriResolver.getConflictsGraph(agentId);
     const conflictUri = `urn:ontofelia:conflict:${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+    // Read the claim's terms first, then validate EVERY store-derived term
+    // before the first write. Retirement is all-or-nothing: a claim whose
+    // terms cannot be rendered safely is left untouched (still accepted, base
+    // triple still present, no half-superseded state) and the caller is told.
+    // claim.objectTriple was rendered by findConflictingClaims (validated).
+    let claimIri: string;
+    let assertedGraphIri: string;
+    let conflictsGraphIri: string;
+    let conflictIri: string;
+    let baseTriple: string | undefined;
+    let retired: { subject: string; predicate: string; object: { type: string; value: string; language?: string } } | undefined;
+    try {
+      claimIri = sparqlIri(claim.claimUri);
+      assertedGraphIri = sparqlIri(claim.assertedInGraph);
+      conflictsGraphIri = sparqlIri(conflictsGraph);
+      conflictIri = sparqlIri(conflictUri);
+
+      const claimDetails = await this.triplestore.query(`
+        PREFIX core: <urn:shared:ontology#>
+        SELECT ?s ?p ?o WHERE {
+          GRAPH ?g {
+            ${claimIri} core:claimSubject ?s ;
+                                core:claimPredicate ?p ;
+                                core:claimObject ?o .
+          }
+        } LIMIT 1
+      `);
+      if (claimDetails.type === 'bindings' && claimDetails.bindings && claimDetails.bindings.length > 0) {
+        const s = claimDetails.bindings[0]['s']?.value;
+        const p = claimDetails.bindings[0]['p']?.value;
+        const oTerm = claimDetails.bindings[0]['o'];
+        if (s && p) {
+          baseTriple = `${sparqlIri(s)} ${sparqlIri(p)} ${claim.objectTriple} .`;
+          if (oTerm) {
+            retired = {
+              subject: s,
+              predicate: p,
+              object: oTerm.type === 'uri'
+                ? { type: 'uri', value: oTerm.value }
+                : { type: 'literal', value: oTerm.value, language: oTerm.language },
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[KnowledgeEngine] not superseding claim "${String(claim.claimUri).slice(0, 80)}": ` +
+        `unsafe or unreadable store term (${(err as Error).message})`,
+      );
+      return false;
+    }
+
     // Drop the obsolete claim's accepted status and flag it superseded.
     await this.triplestore.update(`
       PREFIX core: <urn:shared:ontology#>
-      DELETE { GRAPH ?g { <${claim.claimUri}> core:status "accepted" . } }
+      DELETE { GRAPH ?g { ${claimIri} core:status "accepted" . } }
       INSERT {
         GRAPH ?g {
-          <${claim.claimUri}> core:status "superseded" .
-          <${claim.claimUri}> core:supersededAt "${now}" .
+          ${claimIri} core:status "superseded" .
+          ${claimIri} core:supersededAt "${now}" .
         }
       }
-      WHERE { GRAPH ?g { <${claim.claimUri}> core:status "accepted" . } }
+      WHERE { GRAPH ?g { ${claimIri} core:status "accepted" . } }
     `);
 
     // Remove the base triple — it is no longer accepted as true.
-    // We need the claim's subject/predicate/object for the DELETE; re-fetch them.
-    const claimDetails = await this.triplestore.query(`
-      PREFIX core: <urn:shared:ontology#>
-      SELECT ?s ?p ?o WHERE {
-        GRAPH ?g {
-          <${claim.claimUri}> core:claimSubject ?s ;
-                              core:claimPredicate ?p ;
-                              core:claimObject ?o .
-        }
-      } LIMIT 1
-    `);
-    if (claimDetails.type === 'bindings' && claimDetails.bindings && claimDetails.bindings.length > 0) {
-      const s = claimDetails.bindings[0]['s']?.value;
-      const p = claimDetails.bindings[0]['p']?.value;
-      const oTerm = claimDetails.bindings[0]['o'];
-      if (s && p) {
-        await this.triplestore.update(`
-          DELETE DATA {
-            GRAPH <${claim.assertedInGraph}> {
-              <${s}> <${p}> ${claim.objectTriple} .
-            }
+    if (baseTriple) {
+      await this.triplestore.update(`
+        DELETE DATA {
+          GRAPH ${assertedGraphIri} {
+            ${baseTriple}
           }
-        `);
+        }
+      `);
 
-        // Truth maintenance: a retired base triple may have supported
-        // entailments in the inferred graph. With the base triple already
-        // removed from the live store, materialize() over the retired triple
-        // yields exactly the inferences it (and nothing else) caused — any
-        // entailment still independently derivable is excluded by the diff,
-        // so we never over-retract. Without this step the inferred graph
-        // accumulates stale conclusions after every belief revision.
-        if (this.reasoner && oTerm) {
-          const retired = {
-            subject: s,
-            predicate: p,
-            object: oTerm.type === 'uri'
-              ? { type: 'uri', value: oTerm.value }
-              : { type: 'literal', value: oTerm.value, language: oTerm.language },
-          };
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const stale = await this.reasoner.materialize([retired as any], claim.assertedInGraph);
-            if (stale.length > 0) {
-              const inferredGraph = GraphUriResolver.getInferredGraph(agentId);
-              const lines = stale.map(t => {
-                const subj = `<${t.subject}>`;
-                const pred = `<${t.predicate}>`;
-                let obj: string;
-                if (typeof t.object === 'string') {
-                  obj = (t.object.startsWith('http') || t.object.startsWith('urn:'))
-                    ? `<${t.object}>` : `"${this.escapeLiteral(t.object)}"`;
-                } else if (t.object.type === 'uri') {
-                  obj = `<${t.object.value}>`;
-                } else {
-                  obj = `"${this.escapeLiteral(t.object.value)}"`
-                    + (t.object.language ? `@${t.object.language}` : '');
-                }
-                return `${subj} ${pred} ${obj} .`;
-              }).join('\n');
+      // Truth maintenance: a retired base triple may have supported
+      // entailments in the inferred graph. With the base triple already
+      // removed from the live store, materialize() over the retired triple
+      // yields exactly the inferences it (and nothing else) caused — any
+      // entailment still independently derivable is excluded by the diff,
+      // so we never over-retract. Without this step the inferred graph
+      // accumulates stale conclusions after every belief revision.
+      if (this.reasoner && retired) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const stale = await this.reasoner.materialize([retired as any], claim.assertedInGraph);
+          if (stale.length > 0) {
+            const inferredGraph = sparqlIri(GraphUriResolver.getInferredGraph(agentId));
+            // Best-effort and per triple: a stale entailment that cannot be
+            // rendered safely is skipped (logged), the rest are still removed.
+            const rendered: string[] = [];
+            for (const t of stale) {
+              try {
+                rendered.push(sparqlTripleLine(t));
+              } catch (err) {
+                console.warn(
+                  `[KnowledgeEngine] skipping stale inferred triple with an unsafe term: ${(err as Error).message}`,
+                );
+              }
+            }
+            if (rendered.length > 0) {
               await this.triplestore.update(
-                `DELETE DATA { GRAPH <${inferredGraph}> {\n${lines}\n} }`,
+                `DELETE DATA { GRAPH ${inferredGraph} {\n${rendered.join('\n')}\n} }`,
               );
             }
-          } catch {
-            // Truth maintenance is best-effort — never block belief revision.
           }
+        } catch {
+          // Truth maintenance is best-effort — never block belief revision.
         }
       }
     }
@@ -1081,15 +1144,16 @@ export class KnowledgeEngine {
     await this.triplestore.update(`
       PREFIX core: <urn:shared:ontology#>
       INSERT DATA {
-        GRAPH <${conflictsGraph}> {
-          <${conflictUri}> a core:Conflict ;
+        GRAPH ${conflictsGraphIri} {
+          ${conflictIri} a core:Conflict ;
             core:conflictType "supersession" ;
-            core:supersededClaim <${claim.claimUri}> ;
+            core:supersededClaim ${claimIri} ;
             core:detectedAt "${now}" ;
             core:status "resolved" .
         }
       }
     `);
+    return true;
   }
 
   /**
@@ -1152,12 +1216,12 @@ export class KnowledgeEngine {
 
     if (fact.objectType === 'literal' || !fact.objectType) {
       objectUri = fact.object;
-      objectTriple = `"${this.escapeLiteral(fact.object)}"`;
+      objectTriple = sparqlStringLiteral(fact.object);
     } else {
     const obj = await this.resolveEntity(fact.object, fact.objectType, targetGraph);
     if (obj.isNew) newEntities.push(obj.uri);
     objectUri = obj.uri;
-    objectTriple = `<${obj.uri}>`;
+    objectTriple = sparqlIri(obj.uri);
   }
 
   // Truth-maintenance model: a new fact is accepted as true on arrival.
@@ -1186,8 +1250,9 @@ export class KnowledgeEngine {
       );
       if (conflicting.length > 0) {
         for (const c of conflicting) {
-          await this.retireSupersededClaim(c, context.agentId);
-          supersededClaims.push(c.claimUri);
+          if (await this.retireSupersededClaim(c, context.agentId)) {
+            supersededClaims.push(c.claimUri);
+          }
         }
       }
     }
@@ -1220,8 +1285,8 @@ export class KnowledgeEngine {
   if (status === 'accepted') {
     await this.triplestore.update(`
       INSERT DATA {
-        GRAPH <${targetGraph}> {
-          <${subject.uri}> <${predicate.uri}> ${objectTriple} .
+        GRAPH ${sparqlIri(targetGraph)} {
+          ${sparqlIri(subject.uri)} ${sparqlIri(predicate.uri)} ${objectTriple} .
         }
       }
     `);
@@ -1260,9 +1325,9 @@ export class KnowledgeEngine {
           await this.triplestore.update(`
             PREFIX owl: <http://www.w3.org/2002/07/owl#>
             INSERT DATA {
-              GRAPH <${targetGraph}> {
-                <${userCanonical}> owl:sameAs <${namedEntityUri}> .
-                <${namedEntityUri}> owl:sameAs <${userCanonical}> .
+              GRAPH ${sparqlIri(targetGraph)} {
+                ${sparqlIri(userCanonical)} owl:sameAs ${sparqlIri(namedEntityUri)} .
+                ${sparqlIri(namedEntityUri)} owl:sameAs ${sparqlIri(userCanonical)} .
               }
             }
           `);
@@ -1390,7 +1455,7 @@ export class KnowledgeEngine {
   private async queryGraphFacts(graphUri: string): Promise<Array<{ predicate: string; value: string }>> {
     const sparql = `
       SELECT ?p ?o WHERE {
-        GRAPH <${graphUri}> { ?s ?p ?o }
+        GRAPH ${sparqlIri(graphUri)} { ?s ?p ?o }
       }
     `;
     const result = await this.triplestore.query(sparql);
@@ -1405,7 +1470,7 @@ export class KnowledgeEngine {
   private async queryGraphTriples(graphUri: string): Promise<Array<{ subject: string; predicate: string; value: string }>> {
     const sparql = `
       SELECT ?s ?p ?o WHERE {
-        GRAPH <${graphUri}> { ?s ?p ?o }
+        GRAPH ${sparqlIri(graphUri)} { ?s ?p ?o }
       }
     `;
     const result = await this.triplestore.query(sparql);
@@ -1730,15 +1795,16 @@ export class KnowledgeEngine {
     // DROP on every boot would silently wipe those flags, so we scope the reset
     // to the Environment resource we are about to re-seed.
     await this.triplestore.update(
-      `DELETE WHERE { GRAPH <${graphUri}> { <${setupUri}> ?p ?o } }`,
+      `DELETE WHERE { GRAPH ${sparqlIri(graphUri)} { ${sparqlIri(setupUri)} ?p ?o } }`,
     );
+    const setupIri = sparqlIri(setupUri);
     const lines: string[] = [
-      `<${setupUri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Setup> .`,
-      `<${setupUri}> <http://www.w3.org/2000/01/rdf-schema#label> "Runtime Environment" .`,
+      `${setupIri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Setup> .`,
+      `${setupIri} <http://www.w3.org/2000/01/rdf-schema#label> "Runtime Environment" .`,
     ];
     const tag = (predLocal: string, value: string | undefined) => {
       if (!value) return;
-      lines.push(`<${setupUri}> <${CORE_NS}${predLocal}> "${this.escapeLiteral(value)}" .`);
+      lines.push(`${setupIri} <${CORE_NS}${predLocal}> ${sparqlStringLiteral(value)} .`);
     };
     tag('triplestoreBackend', env.triplestoreBackend);
     tag('reasonerBackend', env.reasonerBackend);
@@ -1747,9 +1813,9 @@ export class KnowledgeEngine {
     tag('workspace', env.workspace);
     tag('gatewayHost', env.gatewayHost);
     if (env.gatewayPort !== undefined) {
-      lines.push(`<${setupUri}> <${CORE_NS}gatewayPort> "${env.gatewayPort}"^^<http://www.w3.org/2001/XMLSchema#integer> .`);
+      lines.push(`${setupIri} <${CORE_NS}gatewayPort> "${sparqlCount(env.gatewayPort)}"^^<http://www.w3.org/2001/XMLSchema#integer> .`);
     }
-    await this.triplestore.update(`INSERT DATA { GRAPH <${graphUri}> { ${lines.join(' ')} } }`);
+    await this.triplestore.update(`INSERT DATA { GRAPH ${sparqlIri(graphUri)} { ${lines.join(' ')} } }`);
     return lines.length;
   }
 
@@ -1768,25 +1834,25 @@ export class KnowledgeEngine {
     const skillsGraph = this.assertGraph(GraphUriResolver.getSkillsGraph(agentId));
 
     // Drop whatever is in the graph so removed tools do not linger.
-    await this.triplestore.update(`DROP SILENT GRAPH <${skillsGraph}>`);
+    await this.triplestore.update(`DROP SILENT GRAPH ${sparqlIri(skillsGraph)}`);
 
     if (tools.length === 0) return 0;
 
     const lines: string[] = [];
     for (const tool of tools) {
-      const skillUri = `urn:${agentId}:skill:${encodeURIComponent(tool.name)}`;
-      lines.push(`<${skillUri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Skill> .`);
-      lines.push(`<${skillUri}> <http://www.w3.org/2000/01/rdf-schema#label> "${this.escapeLiteral(tool.name)}" .`);
+      const skillUri = sparqlIri(`urn:${agentId}:skill:${encodeURIComponent(tool.name)}`);
+      lines.push(`${skillUri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Skill> .`);
+      lines.push(`${skillUri} <http://www.w3.org/2000/01/rdf-schema#label> ${sparqlStringLiteral(tool.name)} .`);
       if (tool.description) {
-        lines.push(`<${skillUri}> <${CORE_NS}description> "${this.escapeLiteral(tool.description)}" .`);
+        lines.push(`${skillUri} <${CORE_NS}description> ${sparqlStringLiteral(tool.description)} .`);
       }
       if (tool.category) {
-        lines.push(`<${skillUri}> <${CORE_NS}category> "${this.escapeLiteral(tool.category)}" .`);
+        lines.push(`${skillUri} <${CORE_NS}category> ${sparqlStringLiteral(tool.category)} .`);
       }
-      lines.push(`<${skillUri}> <${CORE_NS}toolKind> "internal" .`);
+      lines.push(`${skillUri} <${CORE_NS}toolKind> "internal" .`);
     }
 
-    await this.triplestore.update(`INSERT DATA { GRAPH <${skillsGraph}> { ${lines.join(' ')} } }`);
+    await this.triplestore.update(`INSERT DATA { GRAPH ${sparqlIri(skillsGraph)} { ${lines.join(' ')} } }`);
     return tools.length;
   }
 
@@ -1802,28 +1868,28 @@ export class KnowledgeEngine {
     info: { userId?: string; channel?: string; topic?: string },
   ): Promise<void> {
     const graphUri = this.assertGraph(GraphUriResolver.getSessionGraph(agentId, sessionId));
-    const sessionUri = `urn:${agentId}:session:${encodeURIComponent(sessionId)}`;
+    const sessionUri = sparqlIri(`urn:${agentId}:session:${encodeURIComponent(sessionId)}`);
     const now = new Date().toISOString();
     const lines: string[] = [
-      `<${sessionUri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Session> .`,
-      `<${sessionUri}> <${CORE_NS}startedAt> "${now}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .`,
+      `${sessionUri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${CORE_NS}Session> .`,
+      `${sessionUri} <${CORE_NS}startedAt> "${now}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .`,
     ];
     if (info.userId) {
-      const userUri = this.userEntityUri(info.userId);
-      lines.push(`<${sessionUri}> <${CORE_NS}userId> <${userUri}> .`);
+      const userUri = sparqlIri(this.userEntityUri(info.userId));
+      lines.push(`${sessionUri} <${CORE_NS}userId> ${userUri} .`);
     }
     if (info.channel) {
-      lines.push(`<${sessionUri}> <${CORE_NS}channel> "${this.escapeLiteral(info.channel)}" .`);
+      lines.push(`${sessionUri} <${CORE_NS}channel> ${sparqlStringLiteral(info.channel)} .`);
     }
     if (info.topic) {
-      lines.push(`<${sessionUri}> <${CORE_NS}topic> "${this.escapeLiteral(info.topic)}" .`);
+      lines.push(`${sessionUri} <${CORE_NS}topic> ${sparqlStringLiteral(info.topic)} .`);
     }
     // Idempotent: skip if the session is already materialised.
     const exists = await this.triplestore.ask(
-      `ASK { GRAPH <${graphUri}> { <${sessionUri}> a <${CORE_NS}Session> } }`,
+      `ASK { GRAPH ${sparqlIri(graphUri)} { ${sessionUri} a <${CORE_NS}Session> } }`,
     );
     if (exists) return;
-    await this.triplestore.update(`INSERT DATA { GRAPH <${graphUri}> { ${lines.join(' ')} } }`);
+    await this.triplestore.update(`INSERT DATA { GRAPH ${sparqlIri(graphUri)} { ${lines.join(' ')} } }`);
   }
 
   /**
@@ -1918,6 +1984,8 @@ export class KnowledgeEngine {
   }> {
     const selfGraph = this.assertGraph(GraphUriResolver.getSelfGraph(agentId));
     const tmpGraph = `urn:ontofelia:reseed-tmp:self:${agentId}:${reseedTmpSeq++}`;
+    const selfG = sparqlIri(selfGraph);
+    const tmpG = sparqlIri(tmpGraph);
     const ttlPath = path.join(bootstrapDir, 'self.ttl');
 
     const ttl = await fs.readFile(ttlPath, 'utf-8');
@@ -1931,7 +1999,7 @@ export class KnowledgeEngine {
       const n = v ? Number.parseInt(v, 10) : 0;
       return Number.isFinite(n) ? n : 0;
     };
-    const countTotal = () => count(`GRAPH <${selfGraph}> { ?s ?p ?o }`);
+    const countTotal = () => count(`GRAPH ${selfG} { ?s ?p ?o }`);
     // "Preserved" = a self triple whose subject the staged file does NOT
     // declare (the learned self-model and anything else not bootstrap-owned).
     // Captured as a full set of term-identity keys — not just a count — so the
@@ -1942,8 +2010,8 @@ export class KnowledgeEngine {
     const selectPreserved = async (): Promise<Set<string>> => {
       const res = await this.triplestore.query(`
         SELECT ?s ?p ?o WHERE {
-          GRAPH <${selfGraph}> { ?s ?p ?o }
-          FILTER NOT EXISTS { GRAPH <${tmpGraph}> { ?s ?x ?y } }
+          GRAPH ${selfG} { ?s ?p ?o }
+          FILTER NOT EXISTS { GRAPH ${tmpG} { ?s ?x ?y } }
         }`);
       const set = new Set<string>();
       for (const b of (res.type === 'bindings' ? res.bindings ?? [] : [])) {
@@ -1954,7 +2022,7 @@ export class KnowledgeEngine {
 
     // Clear any leftover staging graph, then parse the file into it (reusing the
     // Turtle parser). putGraph is inside the try so a parse error still cleans up.
-    await this.triplestore.update(`DROP SILENT GRAPH <${tmpGraph}>`);
+    await this.triplestore.update(`DROP SILENT GRAPH ${tmpG}`);
     try {
       await this.triplestore.putGraph(tmpGraph, ttl, 'turtle');
 
@@ -1963,7 +2031,7 @@ export class KnowledgeEngine {
       // across loads (every parse mints fresh blank nodes), so such triples
       // would accumulate on every reseed instead of being replaced.
       const blank = await this.triplestore.query(
-        `SELECT ?s WHERE { GRAPH <${tmpGraph}> { ?s ?p ?o } FILTER isBlank(?s) } LIMIT 1`,
+        `SELECT ?s WHERE { GRAPH ${tmpG} { ?s ?p ?o } FILTER isBlank(?s) } LIMIT 1`,
       );
       if (blank.type === 'bindings' && (blank.bindings?.length ?? 0) > 0) {
         throw new Error(
@@ -1986,14 +2054,14 @@ export class KnowledgeEngine {
       // deleted-then-reinserted (which engines may collapse to a net delete).
       // INSERT re-adds every file triple (a no-op for the ones already present).
       await this.triplestore.update(`
-        DELETE { GRAPH <${selfGraph}> { ?s ?p ?o } }
-        INSERT { GRAPH <${selfGraph}> { ?is ?ip ?io } }
+        DELETE { GRAPH ${selfG} { ?s ?p ?o } }
+        INSERT { GRAPH ${selfG} { ?is ?ip ?io } }
         WHERE {
-          { GRAPH <${tmpGraph}> { ?is ?ip ?io } }
+          { GRAPH ${tmpG} { ?is ?ip ?io } }
           UNION
-          { GRAPH <${selfGraph}> { ?s ?p ?o }
-            FILTER EXISTS     { GRAPH <${tmpGraph}> { ?s ?sx ?sy } }
-            FILTER NOT EXISTS { GRAPH <${tmpGraph}> { ?s ?p ?o } } }
+          { GRAPH ${selfG} { ?s ?p ?o }
+            FILTER EXISTS     { GRAPH ${tmpG} { ?s ?sx ?sy } }
+            FILTER NOT EXISTS { GRAPH ${tmpG} { ?s ?p ?o } } }
         }`);
 
       const totalAfter = await countTotal();
@@ -2028,7 +2096,7 @@ export class KnowledgeEngine {
         totalAfter,
       };
     } finally {
-      await this.triplestore.update(`DROP SILENT GRAPH <${tmpGraph}>`);
+      await this.triplestore.update(`DROP SILENT GRAPH ${tmpG}`);
     }
   }
 }
