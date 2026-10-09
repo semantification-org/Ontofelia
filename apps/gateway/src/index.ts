@@ -26,6 +26,32 @@ import type { GatewayContext } from './context.js';
 
 const GATEWAY_GUARD = Symbol.for('ontofelia-gateway-started');
 
+/**
+ * Normalises a raw request URL for prefix decisions: strips the query, decodes percent-encoding
+ * the way the router does, collapses repeated slashes and lowercases. Returns null when the
+ * path cannot be decoded, so callers can fail closed.
+ */
+function normalizeRequestPath(rawUrl: string): string | null {
+  const queryAt = rawUrl.search(/[?#]/);
+  const rawPath = queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt);
+  try {
+    return decodeURIComponent(rawPath).replace(/\/{2,}/g, '/').toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isPathUnder(rawUrl: string, prefix: string): boolean {
+  const p = normalizeRequestPath(rawUrl);
+  if (p === null) return true;
+  return p === prefix || p.startsWith(prefix + '/');
+}
+
+/** True when the decoded path is the API prefix or below it; undecodable paths count as API. */
+function isApiPath(rawUrl: string): boolean {
+  return isPathUnder(rawUrl, '/api');
+}
+
 export async function startGateway(config: OntofeliaConfig): Promise<FastifyInstance> {
   // Guard against dual-package hazard (tsx may resolve this module twice)
   if ((globalThis as Record<symbol, boolean>)[GATEWAY_GUARD]) {
@@ -372,12 +398,22 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   await fastify.register(fastifyMultipart);
 
   // Global Auth Hook
+  // The decision is taken on the route the router actually matched, never on the raw URL:
+  // the router decodes percent-encoding, so string checks on request.url can be bypassed.
   fastify.addHook('onRequest', async (request, reply) => {
-    if (request.url === '/api/health') return;
-    if (request.url === '/ws' || request.url === '/ws/node') return;
-    if (request.url.startsWith('/canvas/media/')) return;
-    if (request.url.startsWith('/webhooks/')) return;
-    if (!request.url.startsWith('/api/')) return;
+    const pattern = request.routeOptions?.url;
+    if (typeof pattern === 'string' && pattern !== '' && pattern !== '/*') {
+      // A concrete route matched: exempt only the explicitly public patterns.
+      if (pattern === '/api/health') return;
+      if (pattern === '/ws' || pattern === '/ws/node') return;
+      if (pattern.startsWith('/canvas/media/')) return;
+      if (pattern.startsWith('/webhooks/')) return;
+      if (!pattern.startsWith('/api/')) return;
+    } else if (!isApiPath(request.url)) {
+      // No concrete route (not found or static wildcard) and the decoded path is not under /api:
+      // no API handler can run, the not-found handler decides.
+      return;
+    }
 
     if (config.gateway.auth.tokenRequired) {
       const authHeader = request.headers.authorization;
@@ -393,7 +429,7 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   if (fs.existsSync(webUiDist)) {
     await fastify.register(fastifyStatic, { root: webUiDist, prefix: '/' });
     fastify.setNotFoundHandler(async (request, reply) => {
-      if (!request.url.startsWith('/api/') && !request.url.startsWith('/ws') && !request.url.startsWith('/webhooks/')) {
+      if (!isApiPath(request.url) && !isPathUnder(request.url, '/ws') && !isPathUnder(request.url, '/webhooks')) {
         return reply.sendFile('index.html');
       }
       reply.code(404).send({ error: 'Not found' });

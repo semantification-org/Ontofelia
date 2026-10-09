@@ -14,7 +14,26 @@ export interface NodeInfo {
   metadata?: Record<string, unknown>;
 }
 
+const SURFACE_TYPES = ['chat', 'canvas', 'file', 'status'];
+
+export class PairingRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PairingRefusedError';
+  }
+}
+
 export class NodeRegistry {
+  /** Maximum number of simultaneously pending pairing requests. */
+  static readonly MAX_PENDING_PAIRINGS = 20;
+  /** How long a pending pairing request stays valid. */
+  static readonly PAIRING_EXPIRY_MS = 10 * 60 * 1000;
+  static readonly MAX_NAME_LENGTH = 64;
+  static readonly MAX_SURFACES = 8;
+  static readonly MAX_CAPABILITIES_PER_SURFACE = 16;
+  static readonly MAX_CAPABILITY_KEY_LENGTH = 32;
+
+  private pendingTimers = new Map<string, ReturnType<typeof setTimeout>>(); // code -> expiry timer
   private nodes = new Map<string, NodeInfo>();
   private pendingPairings = new Map<string, NodeInfo>(); // code -> NodeInfo
   private connections = new Map<string, WebSocket>();
@@ -38,28 +57,92 @@ export class NodeRegistry {
     await fs.writeFile(this.dbPath, JSON.stringify(Array.from(this.nodes.values()), null, 2));
   }
 
-  /** Erstelle Pairing-Request */
+  /** Create a pairing request. Throws PairingRefusedError on invalid input or when too many are pending. */
   async createPairingRequest(nodeInfo: Partial<NodeInfo>): Promise<{ code: string; nodeId: string }> {
-    const code = this.generateCode();
+    const name = NodeRegistry.validateName(nodeInfo.name);
+    const surfaces = NodeRegistry.validateSurfaces(nodeInfo.surfaces);
+
+    if (this.pendingPairings.size >= NodeRegistry.MAX_PENDING_PAIRINGS) {
+      throw new PairingRefusedError('Too many pending pairing requests');
+    }
+
+    let code = this.generateCode();
+    while (this.pendingPairings.has(code)) code = this.generateCode();
     const nodeId = crypto.randomUUID();
-    
+
     const node: NodeInfo = {
       id: nodeId,
-      name: nodeInfo.name || 'Unknown Node',
+      name,
       type: nodeInfo.type || 'headless',
       status: 'pending',
-      surfaces: nodeInfo.surfaces || [],
+      surfaces,
       metadata: nodeInfo.metadata
     };
-    
+
     this.pendingPairings.set(code, node);
-    
-    // Auto-expire after 1 hour
-    setTimeout(() => {
+
+    const timer = setTimeout(() => {
       this.pendingPairings.delete(code);
-    }, 3600000);
-    
+      this.pendingTimers.delete(code);
+    }, NodeRegistry.PAIRING_EXPIRY_MS);
+    timer.unref?.();
+    this.pendingTimers.set(code, timer);
+
     return { code, nodeId };
+  }
+
+  private static validateName(name: unknown): string {
+    if (typeof name !== 'string') throw new PairingRefusedError('Invalid name: must be a string');
+    const trimmed = name.trim();
+    if (trimmed.length === 0) throw new PairingRefusedError('Invalid name: must not be empty');
+    if (trimmed.length > NodeRegistry.MAX_NAME_LENGTH) {
+      throw new PairingRefusedError(`Invalid name: at most ${NodeRegistry.MAX_NAME_LENGTH} characters`);
+    }
+    return trimmed;
+  }
+
+  private static validateSurfaces(surfaces: unknown): NodeSurface[] {
+    if (surfaces === undefined) return [];
+    if (!Array.isArray(surfaces)) throw new PairingRefusedError('Invalid surfaces: must be an array');
+    if (surfaces.length > NodeRegistry.MAX_SURFACES) {
+      throw new PairingRefusedError(`Invalid surfaces: at most ${NodeRegistry.MAX_SURFACES} entries`);
+    }
+    return surfaces.map((s): NodeSurface => {
+      if (!s || typeof s !== 'object' || Array.isArray(s)) {
+        throw new PairingRefusedError('Invalid surfaces: each entry must be an object');
+      }
+      const { type, capabilities } = s as { type?: unknown; capabilities?: unknown };
+      if (typeof type !== 'string' || !SURFACE_TYPES.includes(type)) {
+        throw new PairingRefusedError('Invalid surfaces: unknown surface type');
+      }
+      if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+        throw new PairingRefusedError('Invalid surfaces: capabilities must be an object');
+      }
+      const entries = Object.entries(capabilities as Record<string, unknown>);
+      if (entries.length > NodeRegistry.MAX_CAPABILITIES_PER_SURFACE) {
+        throw new PairingRefusedError('Invalid surfaces: too many capabilities');
+      }
+      const caps: Record<string, boolean> = {};
+      for (const [key, value] of entries) {
+        if (key.length === 0 || key.length > NodeRegistry.MAX_CAPABILITY_KEY_LENGTH || typeof value !== 'boolean') {
+          throw new PairingRefusedError('Invalid surfaces: capabilities must map short names to booleans');
+        }
+        caps[key] = value;
+      }
+      return { type: type as NodeSurface['type'], capabilities: caps };
+    });
+  }
+
+  /** True while a pairing code is still pending. */
+  hasPendingPairing(code: string): boolean {
+    return this.pendingPairings.has(code);
+  }
+
+  private clearPending(code: string): boolean {
+    const timer = this.pendingTimers.get(code);
+    if (timer) clearTimeout(timer);
+    this.pendingTimers.delete(code);
+    return this.pendingPairings.delete(code);
   }
 
   /** Genehmige Pairing */
@@ -71,7 +154,7 @@ export class NodeRegistry {
     node.pairedAt = new Date().toISOString();
     
     this.nodes.set(node.id, node);
-    this.pendingPairings.delete(code.toUpperCase());
+    this.clearPending(code.toUpperCase());
     await this.save();
     
     return node;
@@ -79,8 +162,7 @@ export class NodeRegistry {
 
   /** Lehne Pairing ab */
   async rejectPairing(code: string): Promise<boolean> {
-    const result = this.pendingPairings.delete(code.toUpperCase());
-    return result;
+    return this.clearPending(code.toUpperCase());
   }
 
   /** Registriere WebSocket-Verbindung */
