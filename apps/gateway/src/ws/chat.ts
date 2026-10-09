@@ -10,6 +10,7 @@ export default async function wsChatRoutes(fastify: FastifyInstance, ctx: Gatewa
   // --- Node WebSocket ---
   fastify.get('/ws/node', { websocket: true }, (socket, _req) => {
     let nodeId: string | null = null;
+    let pairingRequested = false;
 
     socket.on('message', async (raw) => {
       try {
@@ -17,7 +18,20 @@ export default async function wsChatRoutes(fastify: FastifyInstance, ctx: Gatewa
 
         switch (msg.type) {
           case 'pair_request': {
-            const result = await nodeRegistry.createPairingRequest({ name: msg.name, surfaces: msg.surfaces });
+            if (pairingRequested) {
+              socket.send(JSON.stringify({ type: 'error', message: 'Pairing already requested on this connection' }));
+              break;
+            }
+            // Claim the slot before awaiting so concurrent messages cannot slip through.
+            pairingRequested = true;
+            let result: { code: string; nodeId: string };
+            try {
+              result = await nodeRegistry.createPairingRequest({ name: msg.name, surfaces: msg.surfaces });
+            } catch (err) {
+              pairingRequested = false;
+              throw err;
+            }
+            if (socket.readyState !== 1) break; // closed while waiting; the pending request expires on its own
             socket.send(JSON.stringify({ type: 'pair_response', code: result.code, status: 'pending' }));
 
             const interval = setInterval(() => {
@@ -27,7 +41,7 @@ export default async function wsChatRoutes(fastify: FastifyInstance, ctx: Gatewa
                 nodeRegistry.registerConnection(nodeId, socket);
                 socket.send(JSON.stringify({ type: 'pair_approved', nodeId }));
                 clearInterval(interval);
-              } else if (!nodeRegistry.get(result.nodeId) && !(nodeRegistry as unknown as { pendingPairings: Map<string, unknown> }).pendingPairings.has(result.code)) {
+              } else if (!nodeRegistry.get(result.nodeId) && !nodeRegistry.hasPendingPairing(result.code)) {
                 socket.send(JSON.stringify({ type: 'pair_rejected' }));
                 socket.close();
                 clearInterval(interval);
