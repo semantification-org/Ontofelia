@@ -1,9 +1,10 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
 import { Parser } from 'sparqljs';
+import { checkSparqlScope, getQueryableGraphScope } from '@ontofelia/semantic-memory';
 
 export class MemorySparqlTool implements ToolDefinition {
   name = 'memory_sparql';
-  description = 'Execute a custom SPARQL SELECT or ASK query against the knowledge graph. Use this for complex queries that the predefined templates in memory_ask cannot handle. Knowledge is partitioned into fixed Named Graphs per the Ontofelia knowledge-graph concept — query the appropriate graph, do not invent graph names.';
+  description = 'Execute a custom SPARQL SELECT or ASK query against the knowledge graph. Use this for complex queries that the predefined templates in memory_ask cannot handle. Every triple pattern must sit inside an explicit GRAPH <iri> block naming one of the graphs you may read (see the query parameter); GRAPH ?var, SERVICE, FROM graphs outside that list and other users\' graphs are refused.';
   category = 'memory' as const;
   permissions: ToolPermission[] = ['memory:read'];
 
@@ -15,14 +16,20 @@ export class MemorySparqlTool implements ToolDefinition {
         description:
           'A SPARQL SELECT or ASK query. Available prefixes: onto: <urn:ontofelia:core#>, ' +
           'rdfs: <http://www.w3.org/2000/01/rdf-schema#>. ' +
-          'Knowledge lives in fixed Named Graphs (agent identifier "ontofelia"): ' +
+          'Write every triple pattern inside GRAPH <iri> { ... } with an explicit IRI; ' +
+          'GRAPH ?g, SERVICE and graph-less patterns are refused. ' +
+          'Graphs you may read (agent identifier "ontofelia"): ' +
           '<urn:shared:ontology> = TBox classes/properties; ' +
-          '<urn:ontofelia:self> = agent identity; ' +
-          '<urn:ontofelia:user:owner> = facts about the user; ' +
+          '<urn:shared:meta>, <urn:shared:shapes>, <urn:shared:world> = shared vocabulary and registry; ' +
+          '<urn:ontofelia:schema> = agent-local schema extension; ' +
           '<urn:ontofelia:worldview> = validated world knowledge; ' +
-          '<urn:ontofelia:claims> = claim provenance; ' +
-          '<urn:ontofelia:evidence> = source evidence; ' +
-          '<urn:ontofelia:inferred> = reasoner-materialized triples. ' +
+          '<urn:ontofelia:user:USERID> = facts about the current user only (USERID is the current sender); ' +
+          '<urn:ontofelia:session:SESSIONID> = the current session only; ' +
+          '<urn:ontofelia:inferred> = reasoner-materialized triples derived from the worldview; ' +
+          '<urn:ontofelia:inferred:user:USERID> = triples derived from the current user\'s own graph. ' +
+          'Owner only: <urn:ontofelia:self>, <urn:ontofelia:skills>, <urn:ontofelia:setup> and the cog: state graphs. ' +
+          'Claims, evidence, conflicts and episodic memory are not queryable here (use memory_ask / memory_explain). ' +
+          'Other users\' graphs are refused. ' +
           'Entity URIs follow the pattern <urn:ontofelia:entity:Name>. ' +
           'Only query these registered graphs — do not invent new graph URIs.'
       }
@@ -33,7 +40,7 @@ export class MemorySparqlTool implements ToolDefinition {
   constructor(private triplestore: TriplestoreAdapter) {}
 
    
-  async execute(input: unknown, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
     const data = input as { query: string };
     const start = Date.now();
 
@@ -42,56 +49,31 @@ export class MemorySparqlTool implements ToolDefinition {
     let errorMsg = '';
 
     try {
-      const parser = new Parser();
-      const parsedQuery = parser.parse(data.query);
+      const parsedQuery = new Parser().parse(data.query);
 
       if (parsedQuery.type !== 'query') {
         errorMsg = 'Query blocked. Only SELECT and ASK queries are allowed.';
       } else if (parsedQuery.queryType !== 'SELECT' && parsedQuery.queryType !== 'ASK') {
         errorMsg = `Query blocked. ${parsedQuery.queryType} is not allowed. Only SELECT and ASK queries are allowed.`;
       } else {
-        // Recursive check for SERVICE clauses
-        let hasService = false;
-        
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const checkService = (node: any) => {
-          if (!node || typeof node !== 'object') return;
-          if (node.type === 'service') hasService = true;
-          for (const key in node) {
-            checkService(node[key]);
-          }
-        };
-        
-        checkService(parsedQuery);
-        
-        if (hasService) {
-          errorMsg = 'Query blocked. SERVICE clauses are not allowed.';
+        // SERVICE, GRAPH ?var, graphs the sender may not read, graph-less patterns.
+        const scope = getQueryableGraphScope(context.agentId, {
+          userId: context.senderId,
+          sessionId: context.sessionId,
+          isOwner: context.isOwner
+        });
+        const verdict = checkSparqlScope(data.query, { ...scope, agentId: context.agentId });
+        if (!verdict.ok) {
+          errorMsg = `Query blocked. ${verdict.message}`;
         } else {
           isSafe = true;
           hasAsk = parsedQuery.queryType === 'ASK';
         }
       }
     } catch {
-      // Fallback: Regex validation
-      const strippedQuery = data.query
-        .replace(/#.*$/gm, '') // Remove comments
-        .replace(/(["'])(?:(?=(\\?))\2.)*?\1/g, "''"); // Remove string literals
-
-      const normalized = strippedQuery.toUpperCase();
-      
-      const blockedKeywords = ['INSERT', 'DELETE', 'DROP', 'CLEAR', 'LOAD', 'SERVICE', 'CONSTRUCT', 'DESCRIBE', 'CREATE', 'MOVE', 'COPY', 'ADD'];
-      const hasModify = blockedKeywords.some(keyword => new RegExp(`\\b${keyword}\\b`).test(normalized));
-      
-      const hasSelect = /\bSELECT\b/.test(normalized);
-      hasAsk = /\bASK\b/.test(normalized);
-
-      if (hasModify) {
-        errorMsg = `Query blocked. Modifying keywords (${blockedKeywords.join(', ')}) are forbidden.`;
-      } else if (!hasSelect && !hasAsk) {
-        errorMsg = 'Query must be a SELECT or ASK query.';
-      } else {
-        isSafe = true;
-      }
+      // Fail closed: a query this parser cannot read cannot be checked for the
+      // graphs it touches, so it is not run.
+      errorMsg = 'Query blocked. The query could not be parsed as SPARQL.';
     }
 
     if (!isSafe) {

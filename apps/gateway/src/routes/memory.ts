@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { createLogger } from '@ontofelia/core';
-import { GraphUriResolver, SHARED_GRAPHS } from '@ontofelia/semantic-memory';
+import { createLogger, resolveAgentId } from '@ontofelia/core';
+import { GraphUriResolver, SHARED_GRAPHS, importVault } from '@ontofelia/semantic-memory';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -29,6 +29,10 @@ function describeKnownGraph(uri: string): { role: string; agentId: string | null
     return { role: agentRole[0], agentId: PRIMARY_AGENT_ID, shared: false };
   }
 
+  if (uri.startsWith(`urn:${PRIMARY_AGENT_ID}:inferred:user:`)) {
+    return { role: 'inferred_user', agentId: PRIMARY_AGENT_ID, shared: false };
+  }
+
   if (uri.startsWith(`urn:${PRIMARY_AGENT_ID}:user:`)) {
     return { role: 'user', agentId: PRIMARY_AGENT_ID, shared: false };
   }
@@ -46,7 +50,7 @@ function describeKnownGraph(uri: string): { role: string; agentId: string | null
 }
 
 export default async function memoryRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
-  const { triplestore, ontologyManager, ontologyBasePath, knowledgeEngine } = ctx;
+  const { triplestore, ontologyManager, ontologyBasePath, knowledgeEngine, agents } = ctx;
   const logger = createLogger('routes-memory');
 
   let lastKnowledgeDelete = 0;
@@ -215,6 +219,57 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
     } catch (e) {
       logger.error('Failed to reseed self graph: ' + (e as Error).message);
       return reply.code(500).send({ error: (e as Error).message });
+    }
+  });
+
+  // --- Vault-LD import (dry run by default) ---
+  // Imports are serialised per agent so two apply runs cannot interleave.
+  const vaultImportTails = new Map<string, Promise<unknown>>();
+  const serialiseVaultImport = <T>(agentId: string, job: () => Promise<T>): Promise<T> => {
+    const prev = vaultImportTails.get(agentId) ?? Promise.resolve();
+    const run = prev.then(job, job);
+    const tail = run.catch(() => undefined);
+    vaultImportTails.set(agentId, tail);
+    void tail.then(() => {
+      if (vaultImportTails.get(agentId) === tail) vaultImportTails.delete(agentId);
+    });
+    return run;
+  };
+
+  fastify.post('/api/knowledge/vault-import', async (
+    request: FastifyRequest<{ Body: { root?: string; vaultName?: string; agentId?: string; apply?: boolean } }>,
+    reply,
+  ) => {
+    const body = request.body ?? {};
+    const agentId = resolveAgentId(body.agentId);
+    if (!agents.get(agentId)) return reply.code(404).send({ error: 'Agent not found' });
+
+    if (typeof body.root !== 'string' || !path.isAbsolute(body.root)) {
+      return reply.code(400).send({ error: 'root must be an absolute path' });
+    }
+    try {
+      const st = await fs.promises.stat(body.root);
+      if (!st.isDirectory()) return reply.code(400).send({ error: 'root is not a directory' });
+    } catch {
+      return reply.code(400).send({ error: 'root does not exist' });
+    }
+    if (typeof body.vaultName !== 'string') {
+      return reply.code(400).send({ error: 'vaultName is required' });
+    }
+    const root = body.root;
+    const vaultName = body.vaultName;
+    const apply = body.apply === true;
+
+    try {
+      return await serialiseVaultImport(agentId, () =>
+        importVault(knowledgeEngine, { root, vaultName, agentId, apply }));
+    } catch (e) {
+      const message = (e as Error).message ?? '';
+      if (/^Invalid vaultName/.test(message) || /more than maxFiles/.test(message)) {
+        return reply.code(400).send({ error: message });
+      }
+      logger.error('Vault import failed: ' + message);
+      return reply.code(500).send({ error: 'Vault import failed' });
     }
   });
 

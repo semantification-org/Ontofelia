@@ -1,10 +1,11 @@
 import { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
-import { FactInput, FactContext } from '../types.js';
+import { FactInput, FactContext, EvidenceType } from '../types.js';
+import { sparqlIri, sparqlStringLiteral } from '../utils/SparqlSyntax.js';
 
 export interface EvidenceInput {
-  evidenceType: 'message-span' | 'tool-result' | 'document' | 'web-source' | 'manual-review';
+  evidenceType: EvidenceType;
   sourceMessageId?: string;
   sessionId?: string;
   channel?: string;
@@ -12,6 +13,18 @@ export interface EvidenceInput {
   rawText?: string;
   sourceUri?: string;
   contentHash?: string;
+}
+
+/**
+ * sourceUri is written as an IRI (<...>): reject anything that could close it
+ * or inject triples. Throws before any write.
+ */
+export function assertValidEvidenceSourceUri(sourceUri: string): void {
+  try {
+    sparqlIri(sourceUri);
+  } catch {
+    throw new Error('Invalid sourceUri for evidence: contains characters not allowed in an IRI');
+  }
 }
 
 export class ClaimProvenanceService {
@@ -32,36 +45,42 @@ export class ClaimProvenanceService {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const uri = `urn:evidence:${id}`;
 
-    let triples = `<${uri}> a <urn:shared:ontology#Evidence> ;
-      <urn:shared:ontology#evidenceType> "${input.evidenceType}" ;
-      <urn:shared:ontology#capturedAt> "${new Date().toISOString()}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .`;
+    const subj = sparqlIri(uri);
+    const ONT = 'urn:shared:ontology#';
+    const XSD_DATETIME = '<http://www.w3.org/2001/XMLSchema#dateTime>';
+    // Validate the graph IRI before anything is assembled.
+    const graphIri = sparqlIri(evidenceGraph);
+
+    let triples = `${subj} a <${ONT}Evidence> ;
+      <${ONT}evidenceType> ${sparqlStringLiteral(input.evidenceType)} ;
+      <${ONT}capturedAt> ${sparqlStringLiteral(new Date().toISOString())}^^${XSD_DATETIME} .`;
 
     if (input.sourceMessageId) {
-      triples += `\n<${uri}> <urn:shared:ontology#sourceMessageId> "${input.sourceMessageId}" .`;
+      triples += `\n${subj} <${ONT}sourceMessageId> ${sparqlStringLiteral(input.sourceMessageId)} .`;
     }
     if (input.sessionId) {
-      triples += `\n<${uri}> <urn:shared:ontology#sessionId> "${input.sessionId}" .`;
+      triples += `\n${subj} <${ONT}sessionId> ${sparqlStringLiteral(input.sessionId)} .`;
     }
     if (input.channel) {
-      triples += `\n<${uri}> <urn:shared:ontology#channel> "${input.channel}" .`;
+      triples += `\n${subj} <${ONT}channel> ${sparqlStringLiteral(input.channel)} .`;
     }
     if (input.actorUri) {
-      triples += `\n<${uri}> <urn:shared:ontology#actor> <${input.actorUri}> .`;
+      triples += `\n${subj} <${ONT}actor> ${sparqlIri(input.actorUri)} .`;
     }
     if (input.rawText) {
-      const escapedText = input.rawText.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n');
-      triples += `\n<${uri}> <urn:shared:ontology#rawText> "${escapedText}" .`;
+      triples += `\n${subj} <${ONT}rawText> ${sparqlStringLiteral(input.rawText)} .`;
     }
     if (input.sourceUri) {
-      triples += `\n<${uri}> <urn:shared:ontology#sourceUri> <${input.sourceUri}> .`;
+      assertValidEvidenceSourceUri(input.sourceUri);
+      triples += `\n${subj} <${ONT}sourceUri> ${sparqlIri(input.sourceUri)} .`;
     }
     if (input.contentHash) {
-      triples += `\n<${uri}> <urn:shared:ontology#contentHash> "${input.contentHash}" .`;
+      triples += `\n${subj} <${ONT}contentHash> ${sparqlStringLiteral(input.contentHash)} .`;
     }
 
     const sparql = `
       INSERT DATA {
-        GRAPH <${evidenceGraph}> {
+        GRAPH ${graphIri} {
           ${triples}
         }
       }
@@ -69,6 +88,11 @@ export class ClaimProvenanceService {
 
     await this.triplestore.update(sparql);
     return { uri, graph: evidenceGraph };
+  }
+
+  /** Mints a fresh claim URI, so a caller can reference a claim before it is stored. */
+  mintClaimUri(): string {
+    return `urn:claim:${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
   /**
@@ -84,16 +108,16 @@ export class ClaimProvenanceService {
     claimGraph: string,
     status: 'accepted' | 'rejected' | 'superseded',
     evidenceUri?: string,
-    evidenceGraph?: string
+    evidenceGraph?: string,
+    claimUri?: string,
   ): Promise<string> {
     // The claim object lands in claimGraph; the asserted/target graph is
     // recorded as a property value. Both must be whitelisted.
     this.graphRegistry.assertWritable(claimGraph);
     this.graphRegistry.assertWritable(targetGraph);
 
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const uri = `urn:claim:${id}`;
-    
+    const uri = claimUri ?? this.mintClaimUri();
+
     // Fallback confidence mapping
     const confLabel = fact.confidenceLabel || 'medium';
     let confNum = fact.confidenceNumeric;
@@ -103,48 +127,55 @@ export class ClaimProvenanceService {
 
     const ingestionRunId = context.ingestionRunId || `ing_${Date.now()}`;
 
-    let triples = `<${uri}> a <urn:shared:ontology#Claim> ;
-      <urn:shared:ontology#claimSubject> <${subjectUri}> ;
-      <urn:shared:ontology#claimPredicate> <${predicateUri}> ;
-      <urn:shared:ontology#claimObject> ${objectTripleStr} ;
-      <urn:shared:ontology#learnedAt> "${new Date().toISOString()}"^^<http://www.w3.org/2001/XMLSchema#dateTime> ;
-      <urn:shared:ontology#confidence> "${confNum}"^^<http://www.w3.org/2001/XMLSchema#decimal> ;
-      <urn:shared:ontology#confidenceLabel> "${confLabel}" ;
-      <urn:shared:ontology#sourceKind> "${fact.sourceKind || 'user'}" ;
-      <urn:shared:ontology#ingestionRunId> "${ingestionRunId}" ;
-      <urn:shared:ontology#status> "${status}" .`;
+    const subj = sparqlIri(uri);
+    const ONT = 'urn:shared:ontology#';
+    const XSD = 'http://www.w3.org/2001/XMLSchema#';
+    const graphIri = sparqlIri(claimGraph);
+    const targetGraphIri = sparqlIri(targetGraph);
+
+    // objectTripleStr is a pre-rendered RDF term supplied by KnowledgeEngine
+    // (an IRI or a literal escaped there); it cannot be validated here.
+    let triples = `${subj} a <${ONT}Claim> ;
+      <${ONT}claimSubject> ${sparqlIri(subjectUri)} ;
+      <${ONT}claimPredicate> ${sparqlIri(predicateUri)} ;
+      <${ONT}claimObject> ${objectTripleStr} ;
+      <${ONT}learnedAt> ${sparqlStringLiteral(new Date().toISOString())}^^<${XSD}dateTime> ;
+      <${ONT}confidence> ${sparqlStringLiteral(String(confNum))}^^<${XSD}decimal> ;
+      <${ONT}confidenceLabel> ${sparqlStringLiteral(confLabel)} ;
+      <${ONT}sourceKind> ${sparqlStringLiteral(fact.sourceKind || 'user')} ;
+      <${ONT}ingestionRunId> ${sparqlStringLiteral(ingestionRunId)} ;
+      <${ONT}status> ${sparqlStringLiteral(status)} .`;
 
     // Target Graph vs Asserted In Graph
     if (status === 'accepted') {
-      triples += `\n<${uri}> <urn:shared:ontology#assertedInGraph> <${targetGraph}> .`;
-      triples += `\n<${uri}> <urn:shared:ontology#acceptedAt> "${new Date().toISOString()}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .`;
+      triples += `\n${subj} <${ONT}assertedInGraph> ${targetGraphIri} .`;
+      triples += `\n${subj} <${ONT}acceptedAt> ${sparqlStringLiteral(new Date().toISOString())}^^<${XSD}dateTime> .`;
     } else {
-      triples += `\n<${uri}> <urn:shared:ontology#targetGraph> <${targetGraph}> .`;
+      triples += `\n${subj} <${ONT}targetGraph> ${targetGraphIri} .`;
     }
 
     // Optional metadata
     if (fact.sourceMessageId) {
-      triples += `\n<${uri}> <urn:shared:ontology#sourceMessageId> "${fact.sourceMessageId}" .`;
+      triples += `\n${subj} <${ONT}sourceMessageId> ${sparqlStringLiteral(fact.sourceMessageId)} .`;
     }
     if (context.sessionId) {
-      triples += `\n<${uri}> <urn:shared:ontology#sessionId> "${context.sessionId}" .`;
+      triples += `\n${subj} <${ONT}sessionId> ${sparqlStringLiteral(context.sessionId)} .`;
     }
     if (fact.sourceSpan) {
-      const escapedText = fact.sourceSpan.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n');
-      triples += `\n<${uri}> <urn:shared:ontology#sourceSpan> "${escapedText}" .`;
+      triples += `\n${subj} <${ONT}sourceSpan> ${sparqlStringLiteral(fact.sourceSpan)} .`;
     }
 
     // Link evidence if provided
     if (evidenceUri) {
-      triples += `\n<${uri}> <urn:shared:ontology#hasEvidence> <${evidenceUri}> .`;
+      triples += `\n${subj} <${ONT}hasEvidence> ${sparqlIri(evidenceUri)} .`;
       if (evidenceGraph) {
-        triples += `\n<${uri}> <urn:shared:ontology#evidenceGraph> <${evidenceGraph}> .`;
+        triples += `\n${subj} <${ONT}evidenceGraph> ${sparqlIri(evidenceGraph)} .`;
       }
     }
 
     const sparql = `
       INSERT DATA {
-        GRAPH <${claimGraph}> {
+        GRAPH ${graphIri} {
           ${triples}
         }
       }

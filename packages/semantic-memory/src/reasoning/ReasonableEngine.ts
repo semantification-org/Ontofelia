@@ -1,6 +1,8 @@
 import { Triple } from '@ontofelia/core';
 import { inferTriples } from '@ontofelia/reasoner';
 import { TriplestoreAdapter } from '@ontofelia/core';
+import { sparqlIri, sparqlStringLiteral } from '../utils/SparqlSyntax.js';
+import { sparqlLangTag, sparqlSubject } from '../utils/TripleSyntax.js';
 
 export class ReasonableEngine {
   constructor(private triplestore: TriplestoreAdapter) {}
@@ -21,18 +23,28 @@ export class ReasonableEngine {
    * The set difference (extended − baseline) is exactly what the new facts
    * caused. This needs no Turtle parsing and is robust to reasoner internals.
    */
-  async materialize(newTriples: Triple[], contextGraphUri: string): Promise<Triple[]> {
+  async materialize(
+    newTriples: Triple[],
+    contextGraphUri: string | string[],
+    options: { strict?: boolean } = {},
+  ): Promise<Triple[]> {
     if (newTriples.length === 0) return [];
 
-    // Get TBOX as Turtle
+    // Get TBOX as Turtle (outside the try so strict callers see read errors too)
     const tboxTtl = await this.triplestore.getGraph('urn:shared:ontology', 'turtle');
-    // Get agent's context graph as Turtle
-    const aboxTtl = await this.triplestore.getGraph(contextGraphUri, 'turtle');
-
-    // New triples as N-Triples string
-    const newTtl = newTriples.map(t => ReasonableEngine.tripleToNt(t)).join('\n');
+    // Get the ABox as Turtle: one context graph, or several that are reasoned
+    // over together (e.g. the worldview plus one user's graph). Concatenated
+    // Turtle documents are a valid Turtle document.
+    const contextGraphs = Array.isArray(contextGraphUri) ? contextGraphUri : [contextGraphUri];
+    const aboxTtl = (await Promise.all(
+      contextGraphs.map(g => this.triplestore.getGraph(g, 'turtle')),
+    )).join('\n');
 
     try {
+      // New triples as N-Triples string (terms validated/escaped; a value that
+      // cannot be written safely aborts reasoning instead of reaching the parser).
+      const newTtl = newTriples.map(t => ReasonableEngine.tripleToNt(t)).join('\n');
+
       // inferTriples is now async (the native reasoner runs on a libuv worker
       // thread instead of blocking the event loop). Baseline and extended are
       // independent runs, so materialize them in parallel — this also exercises
@@ -48,9 +60,13 @@ export class ReasonableEngine {
       );
 
       // Keep only what the new facts caused, and drop the new facts
-      // themselves (they are stored in their target graph, not here).
+      // themselves (they are stored in their target graph, not here). The
+      // new facts are compared in the reasoner's own N-Triples form: a plain
+      // string object and the reasoner's `"value"` literal denote the same
+      // term, which a key built from the Triple shape did not recognise, so
+      // every literal input fact came back as a "derivation".
       const newFactKeys = new Set(
-        newTriples.map(t => ReasonableEngine.tripleKey(t)),
+        newTriples.map(t => ReasonableEngine.rawTripleKey(ReasonableEngine.tripleToNtTerms(t))),
       );
 
       // The reasoner emits terms in N-Triples form: IRIs wrapped in <...>,
@@ -58,46 +74,49 @@ export class ReasonableEngine {
       // (insertTriples) does not double-wrap into <<...>> / <"...">.
       return extended
         .filter(t => !baselineKeys.has(ReasonableEngine.rawTripleKey(t)))
+        .filter(t => !newFactKeys.has(ReasonableEngine.rawTripleKey(t)))
         .map(t => ({
           subject: ReasonableEngine.unwrapIri(t.subject),
           predicate: ReasonableEngine.unwrapIri(t.predicate),
           object: ReasonableEngine.parseTerm(t.object),
-        }))
-        .filter(t => !newFactKeys.has(ReasonableEngine.tripleKey(t)));
+        }));
     } catch (e) {
+      // Callers that act on an EMPTY result destructively (rebuilds) need to
+      // tell "nothing derived" from "reasoner failed".
+      if (options.strict) throw e;
       console.error('Reasoning failed:', e);
       return [];
     }
   }
 
-  /** Identity key for a raw reasoner triple (terms still in N-Triples form). */
+  /**
+   * Identity key for a triple whose terms are in N-Triples form. A plain
+   * literal and an explicit xsd:string literal are the same term in RDF 1.1,
+   * so the datatype is dropped from the key.
+   */
   private static rawTripleKey(t: { subject: string; predicate: string; object: string }): string {
-    return `${t.subject.trim()}${t.predicate.trim()}${t.object.trim()}`;
+    const o = t.object.trim().replace(/\^\^<http:\/\/www\.w3\.org\/2001\/XMLSchema#string>$/, '');
+    return `${t.subject.trim()} ${t.predicate.trim()} ${o}`;
+  }
+
+  /** The three N-Triples terms of a triple (every term validated or escaped). */
+  private static tripleToNtTerms(t: Triple): { subject: string; predicate: string; object: string } {
+    const s = sparqlSubject(t.subject);
+    const p = sparqlIri(t.predicate);
+    let o = '';
+    if (typeof t.object === 'string') {
+      o = (t.object.startsWith('http') || t.object.startsWith('urn:')) ? sparqlIri(t.object) : sparqlStringLiteral(t.object);
+    } else {
+      if (t.object.type === 'uri') o = sparqlIri(t.object.value);
+      else o = sparqlStringLiteral(t.object.value) + (t.object.language ? sparqlLangTag(t.object.language) : '');
+    }
+    return { subject: s, predicate: p, object: o };
   }
 
   /** Serialize a triple to an N-Triples line. */
   private static tripleToNt(t: Triple): string {
-    const s = t.subject.startsWith('_:') ? t.subject : `<${t.subject}>`;
-    const p = `<${t.predicate}>`;
-    let o = '';
-    if (typeof t.object === 'string') {
-      o = (t.object.startsWith('http') || t.object.startsWith('urn:')) ? `<${t.object}>` : `"${t.object}"`;
-    } else {
-      if (t.object.type === 'uri') o = `<${t.object.value}>`;
-      else o = `"${t.object.value}"` + (t.object.language ? `@${t.object.language}` : '');
-    }
-    return `${s} ${p} ${o} .`;
-  }
-
-  /** A stable identity key for a triple, for set membership tests. */
-  private static tripleKey(t: Triple): string {
-    let o: string;
-    if (typeof t.object === 'string') {
-      o = t.object;
-    } else {
-      o = `${t.object.type}:${t.object.value}${t.object.language ? `@${t.object.language}` : ''}`;
-    }
-    return `${t.subject}${t.predicate}${o}`;
+    const { subject, predicate, object } = ReasonableEngine.tripleToNtTerms(t);
+    return `${subject} ${predicate} ${object} .`;
   }
 
   /** Strip surrounding <> from an N-Triples IRI; leave blank nodes as-is. */

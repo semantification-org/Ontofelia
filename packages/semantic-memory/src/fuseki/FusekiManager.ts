@@ -77,7 +77,7 @@ export class FusekiManager {
 
 <#dataset> rdf:type tdb2:DatasetTDB2 ;
     tdb2:location "${this.config.dataDir}" ;
-    tdb2:unionDefaultGraph true .
+    tdb2:unionDefaultGraph false .
 `;
     } else {
       configContent = `@prefix fuseki:  <http://jena.apache.org/fuseki#> .
@@ -95,7 +95,7 @@ export class FusekiManager {
 
 <#dataset> rdf:type tdb2:DatasetTDB2 ;
     tdb2:location "${this.config.dataDir}" ;
-    tdb2:unionDefaultGraph true .
+    tdb2:unionDefaultGraph false .
 `;
     }
 

@@ -71,6 +71,8 @@ export class OntologyContextProvider {
         GRAPH <${SHARED_TBOX}> {
           ?class a owl:Class .
           ?class rdfs:label ?label .
+          # Claim-model bookkeeping terms are not entity types for the parser.
+          FILTER(!STRSTARTS(STR(?class), "urn:shared:ontology#"))
         }
       }
       ORDER BY ?label
@@ -112,6 +114,8 @@ export class OntologyContextProvider {
         {
           GRAPH <${SHARED_TBOX}> {
             { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
+            # Claim-model bookkeeping terms are not facts the parser may emit.
+            FILTER(!STRSTARTS(STR(?prop), "urn:shared:ontology#"))
             OPTIONAL { ?prop rdfs:label ?label }
             OPTIONAL { ?prop rdfs:domain ?domainClass . ?domainClass rdfs:label ?domain }
             OPTIONAL { ?prop rdfs:range ?rangeClass . ?rangeClass rdfs:label ?range }

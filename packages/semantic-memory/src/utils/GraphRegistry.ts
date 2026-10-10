@@ -58,6 +58,7 @@ export type GraphRole =
   | 'schema' // urn:<agent>:schema — agent-local predicate definitions
   | 'conflicts' // urn:<agent>:conflicts
   | 'inferred' // urn:<agent>:inferred — reasoner materialization target
+  | 'inferred-user' // urn:<agent>:inferred:user:<userId> — parameterised, per-user reasoner target
   | 'user' // urn:<agent>:user:<userId> — parameterised
   | 'session' // urn:<agent>:session:<sessionId> — parameterised
   // ── Cognitive architecture graphs (docs/cognitive-architecture/02) ──
@@ -172,6 +173,7 @@ export class GraphRegistry {
     const patterns: string[] = [];
     for (const agentId of this.agents) {
       patterns.push(`urn:${agentId}:user:<userId>`);
+      patterns.push(`urn:${agentId}:inferred:user:<userId>`);
       patterns.push(`urn:${agentId}:session:<sessionId>`);
       patterns.push(`urn:${agentId}:cog:working:<sessionId>:<cycleId>`);
       patterns.push(`urn:${agentId}:cog:goals:<sessionId>`);
@@ -203,6 +205,15 @@ export class GraphRegistry {
         return { uri: graphUri, role, agentId, parameterised: true };
       }
       return null;
+    }
+
+    // Per-user reasoner target: urn:<agent>:inferred:user:<id>.
+    const inferredUser = /^urn:([a-z][a-z0-9_-]*):inferred:user:(.+)$/.exec(graphUri);
+    if (inferredUser) {
+      const [, agentId] = inferredUser;
+      return this.agents.has(agentId)
+        ? { uri: graphUri, role: 'inferred-user', agentId, parameterised: true }
+        : null;
     }
 
     // Parameterised graphs: urn:<agent>:user:<id> / urn:<agent>:session:<id>.

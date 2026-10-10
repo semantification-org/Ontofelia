@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult, TriplestoreAdapter, ToolPermission } from '@ontofelia/core';
-import { GraphUriResolver } from '@ontofelia/semantic-memory';
+import { GraphUriResolver, SHARED_GRAPHS, sparqlIri, sparqlStringLiteral } from '@ontofelia/semantic-memory';
 
 /**
  * Provenance metadata lives in core:Claim objects (urn:shared:ontology#…),
@@ -54,33 +54,58 @@ export class MemoryAskTool implements ToolDefinition {
     // entities live in the user, worldview and self graphs; claim provenance
     // lives in the claims graph. We query across all of them by graph URI.
     const agentId = context.agentId;
-    const claimsGraph = GraphUriResolver.getClaimsGraph(agentId);
+    let claimsGraphIri: string;
+    try {
+      claimsGraphIri = sparqlIri(GraphUriResolver.getClaimsGraph(agentId));
+    } catch (e) {
+      return this.fail(data, start, (e as Error).message);
+    }
+
+    // Graphs this call may read: the agent worldview plus the acting user's own
+    // graph. Another user's private graph is never queried.
+    const factGraphs = [GraphUriResolver.getWorldviewGraph(agentId)];
+    if (context.senderId) factGraphs.push(GraphUriResolver.getUserGraph(agentId, context.senderId));
+    // Labels may additionally come from the shared ontology and the schema graph.
+    const labelGraphs = [...factGraphs, SHARED_GRAPHS.ONTOLOGY, GraphUriResolver.getSchemaGraph(agentId)];
+    // Every graph IRI is validated up front (the user graph embeds the sender
+    // id), so `values` below can never emit an unsafe term.
+    try {
+      [...labelGraphs].forEach((g) => sparqlIri(g));
+    } catch (e) {
+      return this.fail(data, start, (e as Error).message);
+    }
+    const values = (v: string, graphs: string[]) => `VALUES ${v} { ${graphs.map((g) => sparqlIri(g)).join(' ')} }`;
 
     let sparql = '';
 
     switch (data.template) {
       case 'what_do_i_know_about': {
         if (!data.entity) throw new Error('entity is required for what_do_i_know_about');
-        const entityUri = this.toEntityUri(data.entity);
-        // Find all triples where entity is subject OR object, in any of the
-        // agent's own knowledge graphs (urn:<agent>:*) or the shared graphs.
+        let entityIri: string;
+        try {
+          entityIri = sparqlIri(this.toEntityUri(data.entity));
+        } catch (e) {
+          return this.fail(data, start, (e as Error).message);
+        }
+        // Find all triples where entity is subject OR object, in the agent
+        // worldview, the acting user's graph and the shared ontology.
         sparql = `
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?direction ?property ?propertyLabel ?value ?valueLabel ?graph WHERE {
+            ${values('?graph', [...factGraphs, SHARED_GRAPHS.ONTOLOGY])}
             {
               GRAPH ?graph {
-                <${entityUri}> ?property ?value .
+                ${entityIri} ?property ?value .
               }
               BIND("outgoing" AS ?direction)
             } UNION {
               GRAPH ?graph {
-                ?value ?property <${entityUri}> .
+                ?value ?property ${entityIri} .
               }
               BIND("incoming" AS ?direction)
             }
-            FILTER(STRSTARTS(STR(?graph), "urn:${agentId}:") || STRSTARTS(STR(?graph), "urn:shared:"))
-            OPTIONAL { ?property rdfs:label ?propertyLabel }
-            OPTIONAL { ?value rdfs:label ?valueLabel }
+            OPTIONAL { ${values('?plg', labelGraphs)} GRAPH ?plg { ?property rdfs:label ?propertyLabel } }
+            OPTIONAL { ${values('?vlg', labelGraphs)} GRAPH ?vlg { ?value rdfs:label ?valueLabel } }
           }`;
         break;
       }
@@ -89,30 +114,34 @@ export class MemoryAskTool implements ToolDefinition {
           PREFIX onto: <urn:ontofelia:core#>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?person1 ?person1Label ?person2 ?person2Label WHERE {
+            ${values('?graph', factGraphs)}
             GRAPH ?graph {
               ?person1 onto:knows ?person2 .
             }
-            FILTER(STRSTARTS(STR(?graph), "urn:${agentId}:") || STRSTARTS(STR(?graph), "urn:shared:"))
-            OPTIONAL { ?person1 rdfs:label ?person1Label }
-            OPTIONAL { ?person2 rdfs:label ?person2Label }
+            OPTIONAL { ${values('?l1', labelGraphs)} GRAPH ?l1 { ?person1 rdfs:label ?person1Label } }
+            OPTIONAL { ${values('?l2', labelGraphs)} GRAPH ?l2 { ?person2 rdfs:label ?person2Label } }
           }`;
         break;
       case 'recent_facts':
-        // Recency comes from the claim's learnedAt timestamp.
+        // Recency comes from the claim's learnedAt timestamp. Claims live in
+        // one agent-wide graph, so they are restricted to those asserted in
+        // the graphs this call may read.
         sparql = `
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?learnedAt WHERE {
-            GRAPH <${claimsGraph}> {
+            ${values('?ag', factGraphs)}
+            GRAPH ${claimsGraphIri} {
               ?claim a claim:Claim ;
                      claim:claimSubject   ?s ;
                      claim:claimPredicate ?p ;
                      claim:claimObject    ?o ;
+                     claim:assertedInGraph ?ag ;
                      claim:learnedAt      ?learnedAt ;
                      claim:status         "accepted" .
             }
-            OPTIONAL { GRAPH ?g1 { ?s rdfs:label ?sLabel } }
-            OPTIONAL { GRAPH ?g2 { ?p rdfs:label ?pLabel } }
+            OPTIONAL { ${values('?g1', labelGraphs)} GRAPH ?g1 { ?s rdfs:label ?sLabel } }
+            OPTIONAL { ${values('?g2', labelGraphs)} GRAPH ?g2 { ?p rdfs:label ?pLabel } }
           }
           ORDER BY DESC(?learnedAt)
           LIMIT 10`;
@@ -123,17 +152,19 @@ export class MemoryAskTool implements ToolDefinition {
           PREFIX claim: <${CLAIM_NS}>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
           SELECT ?s ?sLabel ?p ?pLabel ?o ?confidence WHERE {
-            GRAPH <${claimsGraph}> {
+            ${values('?ag', factGraphs)}
+            GRAPH ${claimsGraphIri} {
               ?claim a claim:Claim ;
                      claim:claimSubject    ?s ;
                      claim:claimPredicate  ?p ;
                      claim:claimObject     ?o ;
+                     claim:assertedInGraph ?ag ;
                      claim:confidenceLabel ?confidence ;
                      claim:status          "accepted" .
-              FILTER(LCASE(STR(?confidence)) = LCASE("${data.confidence.replace(/"/g, '')}"))
+              FILTER(LCASE(STR(?confidence)) = LCASE(${sparqlStringLiteral(String(data.confidence))}))
             }
-            OPTIONAL { GRAPH ?g1 { ?s rdfs:label ?sLabel } }
-            OPTIONAL { GRAPH ?g2 { ?p rdfs:label ?pLabel } }
+            OPTIONAL { ${values('?g1', labelGraphs)} GRAPH ?g1 { ?s rdfs:label ?sLabel } }
+            OPTIONAL { ${values('?g2', labelGraphs)} GRAPH ?g2 { ?p rdfs:label ?pLabel } }
           }`;
         break;
       default:
@@ -173,5 +204,23 @@ export class MemoryAskTool implements ToolDefinition {
         }
       };
     }
+  }
+
+  private fail(input: unknown, start: number, error: string): ToolResult {
+    return {
+      success: false,
+      output: null,
+      error,
+      auditEntry: {
+        toolName: this.name,
+        timestamp: new Date().toISOString(),
+        duration: Date.now() - start,
+        input,
+        output: null,
+        success: false,
+        error,
+        permissions: [...this.permissions]
+      }
+    };
   }
 }

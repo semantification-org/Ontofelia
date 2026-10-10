@@ -17,6 +17,7 @@
 
 import type { TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
+import { escapeSparqlStringContent } from '../utils/SparqlSyntax.js';
 
 const COGT = 'urn:shared:ontology#cog/';
 const CORE = 'urn:shared:ontology#';
@@ -167,12 +168,7 @@ function clamp01(n: number): number {
 }
 
 function escapeLiteral(s: string): string {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\t/g, '\\t');
+  return escapeSparqlStringContent(s);
 }
 
 /** Cheap bag-of-words overlap in [0,1] (Jaccard over lowercased word sets). */

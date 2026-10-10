@@ -11,6 +11,8 @@ export * from './ner/EntityMatcher.js';
 export * from './FusekiWatchdog.js';
 
 // Named Graph topology — URI resolution, write whitelist, and the registry
+export * from './utils/SparqlSyntax.js';
+export * from './utils/TripleSyntax.js';
 export * from './utils/GraphUriResolver.js';
 export * from './utils/GraphRegistry.js';
 export * from './utils/GraphCatalog.js';
@@ -26,3 +28,6 @@ export * from './ingestion/TrivialMessageDetector.js';
 export * from './ingestion/SemanticParser.js';
 export * from './ingestion/OntologyContextProvider.js';
 export * from './ingestion/SemanticIngestionService.js';
+export * from './sparql/scopeGuard.js';
+export * from './ingestion/VaultNoteMapper.js';
+export * from './ingestion/VaultImporter.js';
