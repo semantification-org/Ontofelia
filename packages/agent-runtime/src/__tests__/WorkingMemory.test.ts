@@ -182,3 +182,29 @@ describe('WorkingMemory', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('WorkingMemory cap check cost', () => {
+  it('a write under the cap never lists the whole graph', async () => {
+    const inner = await makeStore();
+    const queries: string[] = [];
+    const store = new Proxy(inner, {
+      get(target, prop, recv) {
+        if (prop === 'query') {
+          return (sparql: string, g?: string) => {
+            queries.push(sparql);
+            return target.query(sparql, g);
+          };
+        }
+        const v = Reflect.get(target, prop, recv);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const wm = new WorkingMemory(store, GraphRegistry.create([AGENT]), AGENT, SESS, 'cycCap');
+    for (let i = 0; i < 5; i++) {
+      await wm.write({ buffer: 'perceptionBuffer', entryKind: 'message-text', payload: `p${i}`, salience: 0.5 }, PHASE);
+    }
+    expect(queries).toHaveLength(5);
+    for (const q of queries) expect(q).toMatch(/LIMIT 1 OFFSET 200/);
+    expect(await wm.read()).toHaveLength(5);
+  });
+});

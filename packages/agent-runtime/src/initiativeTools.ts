@@ -33,6 +33,10 @@ export const INITIATIVE_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   // read-only inspection / utility
   'ontology_inspect',
   'self_inspect',
+  'list_goals',
+  // writes only the step/progress/plan/status of the cycle's own goal (the tool
+  // refuses any other goal, a mandate/wake/priority change and a reopen)
+  'update_goal_step',
   'web_fetch',
   'read_pdf',
   'datetime',

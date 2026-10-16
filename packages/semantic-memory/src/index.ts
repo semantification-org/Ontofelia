@@ -6,6 +6,7 @@ export * from './reasoning/ReasonableEngine.js';
 export * from './ontology/OntologyManager.js';
 export * from './reasoning/ConflictDetector.js';
 export * from './reflection/ReflectionRunner.js';
+export { reflectOnWorldview } from './reflection/worldviewReflection.js';
 export * from './KnowledgeEngine.js';
 export * from './ner/EntityMatcher.js';
 export * from './FusekiWatchdog.js';
@@ -21,6 +22,7 @@ export * from './utils/GraphCatalog.js';
 export * from './cognitive/EpisodicMemory.js';
 export * from './cognitive/ProceduralMemory.js';
 export * from './cognitive/SelfModel.js';
+export * from './cognitive/EpisodicConsolidation.js';
 
 // Ontology Learning pipeline (Milestone 1)
 export * from './ingestion/types.js';

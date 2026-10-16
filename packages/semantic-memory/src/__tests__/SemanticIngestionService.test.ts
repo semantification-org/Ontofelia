@@ -58,6 +58,33 @@ const TEST_CONTEXT = {
 };
 
 describe('SemanticIngestionService', () => {
+  describe('claim ids', () => {
+    it('reports the claim IRI of each stored fact and none for a duplicate', async () => {
+      const engine = {
+        storeFact: vi
+          .fn()
+          .mockResolvedValueOnce({ success: true, tripleCount: 1, claimUri: 'urn:claim:one' })
+          .mockResolvedValueOnce({ success: true, tripleCount: 0 })
+          .mockResolvedValueOnce({ success: true, tripleCount: 1, claimUri: 'urn:claim:three' }),
+      } as unknown as KnowledgeEngine;
+      const service = new SemanticIngestionService(engine);
+      const report = await service.ingest(
+        makeParseResult({ facts: [makeFact(), makeFact({ object: 'Köln' }), makeFact({ object: 'Bonn' })] }),
+        TEST_CONTEXT,
+      );
+      expect(report.claimUris).toEqual(['urn:claim:one', 'urn:claim:three']);
+    });
+
+    it('reports no claim ids for a skipped parse', async () => {
+      const service = new SemanticIngestionService(createMockEngine());
+      const report = await service.ingest(
+        makeParseResult({ meta: { parseTimeMs: 0, modelUsed: 'none', skipped: true } }),
+        TEST_CONTEXT,
+      );
+      expect(report.claimUris).toEqual([]);
+    });
+  });
+
   describe('fact storage', () => {
     it('stores high-confidence facts', async () => {
       const engine = createMockEngine();

@@ -9,8 +9,9 @@
  * so cross-session scans use a `GRAPH ?g` pattern rather than a fixed graph.
  */
 
-import type { TriplestoreAdapter } from '@ontofelia/core';
+import { compareIso, type TriplestoreAdapter } from '@ontofelia/core';
 import { GraphUriResolver } from '@ontofelia/semantic-memory';
+import { CognitiveConfig } from './CognitiveConfig.js';
 
 const COGT = 'urn:shared:ontology#cog/';
 const XSD_DATETIME = 'http://www.w3.org/2001/XMLSchema#dateTime';
@@ -53,7 +54,54 @@ export interface CogHealthReport {
     'cog:meta': MetaHealth;
   };
   cycle: CycleHealth;
+  /** Every cognitive flag (short key -> on/off). */
+  flags: Record<string, boolean>;
 }
+
+/** Upper bound of the cycle window of the soak metrics. */
+export const SOAK_MAX_CYCLES = 500;
+/** Default size of that window. */
+export const SOAK_DEFAULT_CYCLES = 100;
+/** A graph family is counted up to this many triples; beyond it the count is a floor (`capped`). */
+export const SOAK_TRIPLE_CAP = 100_000;
+/** Graphs of a family are counted up to this many. */
+export const SOAK_GRAPH_CAP = 10_000;
+
+export interface FamilySize {
+  /** Triples counted, at most {@link SOAK_TRIPLE_CAP}. */
+  triples: number;
+  /** Graphs in the family (only for families of many graphs), at most {@link SOAK_GRAPH_CAP}. */
+  graphs?: number;
+  /** True when a cap was hit: the numbers are a lower bound. */
+  capped: boolean;
+}
+
+/**
+ * Soak metrics for the staged rollout: numbers only, no user text, every read
+ * bounded (COUNT over a LIMITed subquery, the cycle window ORDER BY .. LIMIT).
+ */
+export interface SoakMetrics {
+  /** The window actually used (1..{@link SOAK_MAX_CYCLES}). */
+  windowCycles: number;
+  /** Persist timing of the newest turns of this process; empty after a restart. */
+  persistLatencyMs: { samples: number; p50: number | null; p95: number | null };
+  /** Triples per cognitive graph family. */
+  graphSizes: Record<'episodic' | 'procedural' | 'meta' | 'goalsLongterm' | 'goalsSession' | 'cycles' | 'working', FamilySize>;
+  /** Cycles seen in the window, and impasse-flagged ones per 100 of them (null with no cycles). */
+  impasses: { cyclesInWindow: number; flaggedInWindow: number; per100Cycles: number | null };
+  /** Mean full-dataset dumps per turn over the persist samples; null when the adapter keeps no counter or no turn ran. */
+  dumpsPerTurn: number | null;
+}
+
+/** Nearest-rank percentile of an ascending array; null when empty. */
+export function nearestRank(sortedAsc: number[], p: number): number | null {
+  if (sortedAsc.length === 0) return null;
+  const idx = Math.min(sortedAsc.length - 1, Math.max(0, Math.ceil(p * sortedAsc.length) - 1));
+  return sortedAsc[idx];
+}
+
+const sparqlStr = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+const safeIri = (v: string) => /^[^<>"{}|^`\\\s]+$/.test(v);
 
 export class CogHealth {
   constructor(
@@ -67,7 +115,7 @@ export class CogHealth {
     const goalsLong = GraphUriResolver.getCogGoalsLongtermGraph(this.agentId);
     const meta = GraphUriResolver.getCogMetaGraph(this.agentId);
 
-    const [epi, proc, skillCount, seqCount, goals, metaH, cycle] = await Promise.all([
+    const [epi, proc, skillCount, seqCount, goals, metaH, cycle, flags] = await Promise.all([
       this.graphHealth(episodic),
       this.graphHealth(procedural),
       this.countOfType(procedural, `${COGT}Skill`),
@@ -75,6 +123,7 @@ export class CogHealth {
       this.goalsHealth(goalsLong),
       this.metaHealth(meta, now),
       this.cycleHealth(meta),
+      new CognitiveConfig(this.triplestore, this.agentId).allFlags(),
     ]);
 
     return {
@@ -86,6 +135,7 @@ export class CogHealth {
         'cog:meta': metaH,
       },
       cycle,
+      flags,
     };
   }
 
@@ -99,7 +149,7 @@ export class CogHealth {
       }`);
     const lastWrite = (stamps.bindings ?? [])
       .map((b) => b.o.value)
-      .sort()
+      .sort(compareIso)
       .pop();
     return { tripleCount: count.bindings?.length ?? 0, lastWrite };
   }
@@ -210,5 +260,97 @@ export class CogHealth {
     const marker = ':cog:cycle:';
     const i = uri.indexOf(marker);
     return i >= 0 ? uri.slice(i + marker.length) : uri;
+  }
+
+  /**
+   * Soak metrics (see {@link SoakMetrics}). `persist` is the timing window of the
+   * running process (`CycleManager.recentPersists`); everything else is read from
+   * the store with bounded queries.
+   */
+  async soak(opts: { cycles?: number; persist?: Array<{ ms: number; dumps?: number }> } = {}): Promise<SoakMetrics> {
+    const n = Number.isInteger(opts.cycles) ? Math.max(1, Math.min(opts.cycles as number, SOAK_MAX_CYCLES)) : SOAK_DEFAULT_CYCLES;
+    const persist = (opts.persist ?? []).slice(-n);
+    const ms = persist.map((x) => x.ms).filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+    const dumped = persist.filter((x) => typeof x.dumps === 'number' && x.dumps >= 0).map((x) => x.dumps as number);
+
+    const a = this.agentId;
+    const longterm = GraphUriResolver.getCogGoalsLongtermGraph(a);
+    const [episodic, procedural, meta, goalsLongterm, goalsSession, cycles, working, impasses] = await Promise.all([
+      this.fixedSize(GraphUriResolver.getCogEpisodicGraph(a)),
+      this.fixedSize(GraphUriResolver.getCogProceduralGraph(a)),
+      this.fixedSize(GraphUriResolver.getCogMetaGraph(a)),
+      this.fixedSize(longterm),
+      this.familySize(GraphUriResolver.getCogGoalsSessionGraph(a, ''), longterm),
+      this.familySize(GraphUriResolver.getCogCyclesGraph(a, '')),
+      this.familySize(GraphUriResolver.getCogWorkingGraph(a, 'x', 'y').slice(0, -'x:y'.length)),
+      this.impasseWindow(n),
+    ]);
+
+    return {
+      windowCycles: n,
+      persistLatencyMs: { samples: ms.length, p50: nearestRank(ms, 0.5), p95: nearestRank(ms, 0.95) },
+      graphSizes: { episodic, procedural, meta, goalsLongterm, goalsSession, cycles, working },
+      impasses,
+      dumpsPerTurn: dumped.length === 0 ? null : Number((dumped.reduce((s, d) => s + d, 0) / dumped.length).toFixed(3)),
+    };
+  }
+
+  /** Bounded triple count of one named graph. */
+  private async fixedSize(graph: string): Promise<FamilySize> {
+    const res = await this.triplestore.query(`
+      SELECT (COUNT(*) AS ?c) WHERE {
+        SELECT ?s WHERE { GRAPH <${graph}> { ?s ?p ?o } } LIMIT ${SOAK_TRIPLE_CAP + 1}
+      }`);
+    const c = Number(res.bindings?.[0]?.c?.value ?? 0);
+    return { triples: Math.min(c, SOAK_TRIPLE_CAP), capped: c > SOAK_TRIPLE_CAP };
+  }
+
+  /** Bounded triple and graph count of every graph whose IRI starts with `prefix` (minus `except`). */
+  private async familySize(prefix: string, except?: string): Promise<FamilySize> {
+    const filter = `STRSTARTS(STR(?g), ${sparqlStr(prefix)})${except ? ` && ?g != <${except}>` : ''}`;
+    const triples = await this.triplestore.query(`
+      SELECT (COUNT(*) AS ?c) WHERE {
+        SELECT ?s WHERE { GRAPH ?g { ?s ?p ?o } FILTER(${filter}) } LIMIT ${SOAK_TRIPLE_CAP + 1}
+      }`);
+    const graphs = await this.triplestore.query(`
+      SELECT (COUNT(*) AS ?c) WHERE {
+        SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } FILTER(${filter}) } LIMIT ${SOAK_GRAPH_CAP + 1}
+      }`);
+    const t = Number(triples.bindings?.[0]?.c?.value ?? 0);
+    const g = Number(graphs.bindings?.[0]?.c?.value ?? 0);
+    return {
+      triples: Math.min(t, SOAK_TRIPLE_CAP),
+      graphs: Math.min(g, SOAK_GRAPH_CAP),
+      capped: t > SOAK_TRIPLE_CAP || g > SOAK_GRAPH_CAP,
+    };
+  }
+
+  /** Impasse-flagged cycles among the newest `n` cycles of any session. */
+  private async impasseWindow(n: number): Promise<SoakMetrics['impasses']> {
+    const res = await this.triplestore.query(`
+      SELECT ?c ?s WHERE {
+        GRAPH ?g { ?c a <${COGT}Cycle> ; <${COGT}startedAt> ?s }
+      } ORDER BY DESC(?s) LIMIT ${n}`);
+    const rows = (res.bindings ?? [])
+      .map((b) => ({ uri: b.c.value, started: b.s.value }))
+      .filter((r) => safeIri(r.uri))
+      .sort((x, y) => compareIso(y.started, x.started))
+      .slice(0, n);
+    if (rows.length === 0) return { cyclesInWindow: 0, flaggedInWindow: 0, per100Cycles: null };
+    const meta = GraphUriResolver.getCogMetaGraph(this.agentId);
+    const flagged = await this.triplestore.query(`
+      SELECT DISTINCT ?c WHERE {
+        GRAPH <${meta}> {
+          ?m a <${COGT}ReflectiveMarker> ; <${COGT}reflectsOn> ?c ; <${COGT}flaggedImpasse> ?fi .
+          VALUES ?c { ${rows.map((r) => `<${r.uri}>`).join(' ')} }
+        }
+      }`);
+    const hit = new Set((flagged.bindings ?? []).map((b) => b.c.value));
+    const count = rows.filter((r) => hit.has(r.uri)).length;
+    return {
+      cyclesInWindow: rows.length,
+      flaggedInWindow: count,
+      per100Cycles: Number(((count / rows.length) * 100).toFixed(2)),
+    };
   }
 }

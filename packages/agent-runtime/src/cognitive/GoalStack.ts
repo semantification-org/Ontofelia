@@ -18,8 +18,8 @@
  *    active set, so sorting in-process is both safe and cheap.
  */
 
-import type { TriplestoreAdapter } from '@ontofelia/core';
-import { GraphRegistry, GraphUriResolver } from '@ontofelia/semantic-memory';
+import { OWNER_USER_KEY, compareIsoDesc, type TriplestoreAdapter } from '@ontofelia/core';
+import { GraphRegistry, GraphUriResolver, sparqlIri } from '@ontofelia/semantic-memory';
 
 const COGT = 'urn:shared:ontology#cog/';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -51,6 +51,43 @@ const RESPOND_TO_USER_PRIORITY = 0.5;
 
 /** Opaque identifier (an IRI) of a goal. */
 export type GoalId = string;
+
+/**
+ * Goal type taxonomy (doc 07 §2.2, registered in the TBox). `RespondToUser` is
+ * the implicit safety-net goal; `ResolveConflict` and `CompletePlan` are
+ * reserved for later steps and are never created by the goal decision tree.
+ */
+export const GOAL_TYPES = {
+  RespondToUser: `${COGT}RespondToUser`,
+  AnswerQuestion: `${COGT}AnswerQuestion`,
+  ExecuteCommand: `${COGT}ExecuteCommand`,
+  HandleRequest: `${COGT}HandleRequest`,
+  AnswerInTopic: `${COGT}AnswerInTopic`,
+  OwnerRequestedWork: `${COGT}OwnerRequestedWork`,
+  ResolveConflict: `${COGT}ResolveConflict`,
+  CompletePlan: `${COGT}CompletePlan`,
+} as const;
+
+/** A goal lifecycle transition that is recorded as an episode. */
+export type GoalTransitionKind = 'pushed' | 'resolved' | 'abandoned' | 'blocked';
+
+export interface GoalTransition {
+  kind: GoalTransitionKind;
+  goalUri: GoalId;
+  goalType: string;
+  goalLabel: string;
+  /** The goal's owner key; the owner's key for an owner-less goal. */
+  forUser: string;
+  at: Date;
+  /** The blocked reason, when the goal was blocked. */
+  reason?: string;
+}
+
+/**
+ * Receives every recorded transition of a goal. It must not throw into the
+ * caller: failures of the sink are swallowed by the stack.
+ */
+export type GoalTransitionSink = (t: GoalTransition) => void | Promise<void>;
 
 /**
  * Consecutive initiative-cycle failures after which a goal is auto-blocked so
@@ -118,9 +155,16 @@ export interface GoalInput {
   parentGoal?: GoalId;
   triggeredByEpisode?: string; // URI
   triggeredByUser?: string; // URI
+  /**
+   * The user key the goal belongs to (`cogt:forUser`). Defaults to the stack's
+   * viewer when it has one. Owner-armed goals belong to {@link OWNER_USER_KEY}.
+   */
+  forUser?: string;
   plannedSteps?: string;
   currentStep?: string;
   tags?: string[];
+  /** Entity IRIs the goal is about (`cogt:aboutEntity`), from the perception of the turn that created it. */
+  about?: string[];
   /** Force promotion to the longterm graph at session close regardless of deadline. */
   longTerm?: boolean;
   // ── Initiative wake policy (docs/initiative-architecture.md §5) ──
@@ -152,10 +196,14 @@ export interface Goal {
   parentGoal?: string;
   triggeredByEpisode?: string;
   triggeredByUser?: string;
+  /** The user key the goal belongs to; absent on legacy goals (see {@link goalOwnerKey}). */
+  forUser?: string;
   plannedSteps?: string;
   currentStep?: string;
   stepProgress?: string;
   longTerm?: boolean;
+  /** Entity IRIs the goal is about; absent when none were recorded. */
+  about?: string[];
   // ── Initiative wake policy / tracking (docs/initiative-architecture.md §5) ──
   wakeAt?: string;
   wakeEvery?: string;
@@ -181,6 +229,48 @@ function escapeLiteral(s: string): string {
     .replace(/\t/g, '\\t');
 }
 
+/** Who is looking at the goal forest: the current sender. */
+export interface GoalViewer {
+  /** The sender's user key (`cogUserKey`). */
+  userId: string;
+  /** True for the verified owner (and the synthetic envelopes that claim it). */
+  isOwner: boolean;
+}
+
+const SENDER_ENTITY_PREFIX = 'urn:entity:agent-sender:';
+
+/**
+ * The user key a goal belongs to, or undefined when it has no owner. Goals
+ * carry `cogt:forUser`; a legacy goal written before the key existed falls back
+ * to the sender entity in `cogt:triggeredByUser`. A goal with neither (the
+ * implicit RespondToUser goal, owner-less legacy long-term goals) has no owner.
+ */
+export function goalOwnerKey(goal: Pick<Goal, 'forUser' | 'triggeredByUser'>): string | undefined {
+  if (goal.forUser) return goal.forUser;
+  if (goal.triggeredByUser?.startsWith(SENDER_ENTITY_PREFIX)) {
+    try {
+      return decodeURIComponent(goal.triggeredByUser.slice(SENDER_ENTITY_PREFIX.length));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Strict ownership: does the goal belong to `userKey`? An owner-less goal
+ * belongs to the owner only, except the generic RespondToUser goal, which
+ * carries no user content and belongs to everyone.
+ */
+export function goalBelongsTo(
+  goal: Pick<Goal, 'forUser' | 'triggeredByUser' | 'goalType'>,
+  userKey: string,
+): boolean {
+  const owner = goalOwnerKey(goal);
+  if (owner !== undefined) return owner === userKey;
+  return goal.goalType === RESPOND_TO_USER || userKey === OWNER_USER_KEY;
+}
+
 export class GoalStack {
   private readonly minWakeIntervalMs: number;
 
@@ -191,8 +281,44 @@ export class GoalStack {
     private readonly sessionId: string,
     /** Injectable floor for recurring wakes (design §5). Defaults to the cooldown. */
     minWakeIntervalMs: number = DEFAULT_MIN_WAKE_INTERVAL_MS,
+    /**
+     * The current sender. With a viewer, a non-owner sees only goals that belong
+     * to them ({@link goalBelongsTo}) in every read, in the session and in the
+     * long-term graph; the owner sees every goal. New goals are stamped with the
+     * viewer's key. Without a viewer the stack is unscoped, which is for the
+     * owner-only commands and tools and the unattended initiative runtime.
+     */
+    private readonly viewer?: GoalViewer,
+    /**
+     * Called after a goal is pushed and after its status changes to resolved,
+     * abandoned or blocked (never for the implicit RespondToUser goal). The
+     * owner of the stack decides where the episode is written.
+     */
+    private readonly onTransition?: GoalTransitionSink,
   ) {
     this.minWakeIntervalMs = minWakeIntervalMs;
+  }
+
+  private async emit(kind: GoalTransitionKind, goal: Goal, at: Date, reason?: string): Promise<void> {
+    if (!this.onTransition || goal.goalType === RESPOND_TO_USER) return;
+    try {
+      await this.onTransition({
+        kind,
+        goalUri: goal.uri,
+        goalType: goal.goalType,
+        goalLabel: goal.goalLabel,
+        forUser: goalOwnerKey(goal) ?? OWNER_USER_KEY,
+        at,
+        ...(reason ? { reason } : {}),
+      });
+    } catch {
+      /* the transition is already stored; a lost episode must not undo it */
+    }
+  }
+
+  private visible(goal: Goal): boolean {
+    if (!this.viewer || this.viewer.isOwner) return true;
+    return goalBelongsTo(goal, this.viewer.userId);
   }
 
   /**
@@ -200,7 +326,7 @@ export class GoalStack {
    * churn), or beyond the sanity ceiling (design B1/M1). Throws a clear error so
    * a bad interval is refused at write time, never at the next wake.
    */
-  private validateWakeEvery(wakeEvery: string): void {
+  validateWakeEvery(wakeEvery: string): void {
     const ms = iso8601DurationToMs(wakeEvery); // throws on bad grammar
     if (ms < this.minWakeIntervalMs) {
       throw new Error(
@@ -283,7 +409,9 @@ export class GoalStack {
     if (input.triggeredByEpisode)
       lines.push(`<${uri}> <${COGT}triggeredByEpisode> <${input.triggeredByEpisode}> .`);
     if (input.triggeredByUser)
-      lines.push(`<${uri}> <${COGT}triggeredByUser> <${input.triggeredByUser}> .`);
+      lines.push(`<${uri}> <${COGT}triggeredByUser> ${sparqlIri(input.triggeredByUser)} .`);
+    const forUser = input.forUser ?? this.viewer?.userId;
+    if (forUser) lines.push(`<${uri}> <${COGT}forUser> "${escapeLiteral(forUser)}" .`);
     if (input.plannedSteps)
       lines.push(`<${uri}> <${COGT}plannedSteps> "${escapeLiteral(input.plannedSteps)}" .`);
     if (input.currentStep)
@@ -297,8 +425,21 @@ export class GoalStack {
     if (input.servesDrive) lines.push(`<${uri}> <${COGT}servesDrive> <${input.servesDrive}> .`);
     for (const t of input.tags ?? [])
       lines.push(`<${uri}> <${COGT}tags> "${escapeLiteral(t)}" .`);
+    for (const a of new Set(input.about ?? [])) {
+      let iri: string;
+      try {
+        iri = sparqlIri(a);
+      } catch {
+        continue; // not a safe IRI: never written
+      }
+      lines.push(`<${uri}> <${COGT}aboutEntity> ${iri} .`);
+    }
 
     await this.triplestore.update(`INSERT DATA { GRAPH <${graph}> {\n${lines.join('\n')}\n} }`);
+    if (this.onTransition) {
+      const created = await this.rawGoal(graph, uri);
+      if (created) await this.emit('pushed', created, now);
+    }
     return uri;
   }
 
@@ -307,11 +448,19 @@ export class GoalStack {
    * (doc 07 §5.1). If any goal is already active this is a no-op; otherwise the
    * implicit goal is pushed at priority 0.5. Returns the top active goal.
    */
-  async ensureImplicit(now: Date = new Date()): Promise<Goal> {
-    const active = await this.active();
+  async ensureImplicit(now: Date = new Date(), userKey?: string): Promise<Goal> {
+    const all = await this.active();
+    // With a user key only the user's own active goals count: another user's goal
+    // (visible to the owner) is not a safety net for this turn.
+    const active = userKey === undefined ? all : all.filter((g) => goalBelongsTo(g, userKey));
     if (active.length > 0) return active[0];
     const uri = await this.push(
-      { goalType: RESPOND_TO_USER, goalLabel: 'Respond to the user', priority: RESPOND_TO_USER_PRIORITY },
+      {
+        goalType: RESPOND_TO_USER,
+        goalLabel: 'Respond to the user',
+        priority: RESPOND_TO_USER_PRIORITY,
+        ...(userKey !== undefined ? { forUser: userKey } : {}),
+      },
       now,
     );
     const goal = await this.get(uri);
@@ -319,20 +468,63 @@ export class GoalStack {
     return goal ?? (await this.active())[0];
   }
 
+  /**
+   * Resolve the active implicit RespondToUser goals created before `before`
+   * (visible to the viewer; with `userKey`, only that user's). They are the
+   * leftovers of cycles that never reached their end. Returns the count.
+   */
+  async resolveStaleImplicit(before: Date, now: Date = new Date(), userKey?: string): Promise<number> {
+    const stale = (await this.active()).filter(
+      (g) =>
+        g.goalType === RESPOND_TO_USER &&
+        Date.parse(g.createdAt) < before.getTime() &&
+        (userKey === undefined || goalBelongsTo(g, userKey)),
+    );
+    for (const g of stale) await this.setStatus(g.uri, 'resolved', undefined, now);
+    return stale.length;
+  }
+
   /** Transition a goal's status, stamping the matching timestamp / reason. */
   async setStatus(goalId: GoalId, status: GoalStatus, reason?: string, now: Date = new Date()): Promise<void> {
+    const commit = await this.prepareSetStatus(goalId, status, reason, now);
+    if (commit) await commit();
+  }
+
+  /**
+   * The reads of {@link setStatus} first, the write later: resolves with a
+   * `commit` that stores the transition (one update for all its predicates) and
+   * emits the transition, or with undefined when the goal does not exist. The
+   * update is issued synchronously when `commit` is called, so a caller can
+   * prepare several writes and issue them together.
+   */
+  async prepareSetStatus(
+    goalId: GoalId,
+    status: GoalStatus,
+    reason?: string,
+    now: Date = new Date(),
+  ): Promise<(() => Promise<void>) | undefined> {
     const graph = await this.graphOf(goalId);
-    if (!graph) return;
+    if (!graph) return undefined;
     this.registry.assertWritable(graph);
+    const before = this.onTransition ? await this.rawGoal(graph, goalId) : undefined;
     const ts = now.toISOString();
     const dt = (s: string) => `"${s}"^^<${XSD}dateTime>`;
 
-    await this.replaceOne(graph, goalId, `${COGT}goalStatus`, `"${status}"`);
-    await this.replaceOne(graph, goalId, `${COGT}updatedAt`, dt(ts));
-    if (status === 'resolved') await this.replaceOne(graph, goalId, `${COGT}resolvedAt`, dt(ts));
-    if (status === 'abandoned') await this.replaceOne(graph, goalId, `${COGT}abandonedAt`, dt(ts));
+    const pairs: Array<[string, string]> = [
+      [`${COGT}goalStatus`, `"${status}"`],
+      [`${COGT}updatedAt`, dt(ts)],
+    ];
+    if (status === 'resolved') pairs.push([`${COGT}resolvedAt`, dt(ts)]);
+    if (status === 'abandoned') pairs.push([`${COGT}abandonedAt`, dt(ts)]);
     if (status === 'blocked' && reason)
-      await this.replaceOne(graph, goalId, `${COGT}blockedReason`, `"${escapeLiteral(reason)}"`);
+      pairs.push([`${COGT}blockedReason`, `"${escapeLiteral(reason)}"`]);
+    const update = this.replaceOps(graph, goalId, pairs);
+    return async () => {
+      await this.triplestore.update(update);
+      if (before && before.status !== status && (status === 'resolved' || status === 'abandoned' || status === 'blocked')) {
+        await this.emit(status, before, now, status === 'blocked' ? reason : undefined);
+      }
+    };
   }
 
   /** Update the goal's current step (and optional progress marker). */
@@ -349,6 +541,20 @@ export class GoalStack {
     );
     if (progress !== undefined)
       await this.replaceOne(graph, goalId, `${COGT}stepProgress`, `"${escapeLiteral(progress)}"`);
+  }
+
+  /** Replace the goal's free-text plan (`cogt:plannedSteps`). */
+  async setPlannedSteps(goalId: GoalId, plannedSteps: string, now: Date = new Date()): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    await this.replaceOne(graph, goalId, `${COGT}plannedSteps`, `"${escapeLiteral(plannedSteps)}"`);
+    await this.replaceOne(
+      graph,
+      goalId,
+      `${COGT}updatedAt`,
+      `"${now.toISOString()}"^^<${XSD}dateTime>`,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -495,23 +701,23 @@ export class GoalStack {
    * or an initiative-/agent-authored episode therefore all fail — closing the
    * self-mandate escape where a self-inferred goal invents its own mandate.
    *
-   * Residual gap (flagged per design §5): the episodic model records the sender
-   * entity (`urn:entity:agent-sender:<id>`) but does NOT persist the
-   * `isOwner` bit, so this validates "inbound human utterance, not self-authored"
-   * rather than strictly "the OWNER". Distinguishing owner from any other
-   * inbound sender needs an owner marker on the episode (or an allowlist check)
-   * and is left as a follow-up; the primary v1 threat (self-mandate) is closed.
+   * The episode must also carry `cogt:actorIsOwner true`, which the cycle manager
+   * writes only for an inbound turn of the verified owner in a live conversation
+   * (never for other senders, nor for the initiative cycle's synthetic envelope,
+   * which claims isOwner too). Episodes written before the marker existed lack it
+   * and are therefore not valid mandates.
    */
   async isMandateValid(mandatedBy: string | undefined): Promise<boolean> {
     if (!mandatedBy) return false;
     const graph = GraphUriResolver.getCogEpisodicGraph(this.agentId);
     const selfActor = `urn:${this.agentId}:self#${this.agentId}`;
     const res = await this.triplestore.query(`
-      SELECT ?type ?actor WHERE {
+      SELECT ?type ?actor ?owner WHERE {
         GRAPH <${graph}> {
           <${mandatedBy}> a <${COGT}Episode> ;
                           <${COGT}episodeType> ?type .
           OPTIONAL { <${mandatedBy}> <${COGT}actor> ?actor . }
+          OPTIONAL { <${mandatedBy}> <${COGT}actorIsOwner> ?owner . }
         }
       } LIMIT 1`);
     const b = res.bindings?.[0];
@@ -519,6 +725,7 @@ export class GoalStack {
     if (b.type?.value !== 'message-received') return false; // not an inbound utterance
     const actor = b.actor?.value;
     if (!actor || actor === selfActor) return false; // (c) agent/initiative-authored
+    if (b.owner?.value !== 'true') return false; // (d) not marked as an owner turn
     return true;
   }
 
@@ -534,19 +741,25 @@ export class GoalStack {
     return goals.sort(
       (a, b) =>
         b.priority - a.priority ||
-        (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0),
+        compareIsoDesc(a.createdAt, b.createdAt),
     );
   }
 
   /** Every goal in both graphs, any status (read-only; for inspection/UI). */
   async list(): Promise<Goal[]> {
     const goals = await this.readWhere('');
-    return goals.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    return goals.sort((a, b) => compareIsoDesc(a.createdAt, b.createdAt));
   }
 
   /** Fetch a single goal by IRI (searches both graphs). */
   async get(uri: GoalId): Promise<Goal | undefined> {
-    const goals = await this.readWhere(`VALUES ?goal { <${uri}> }`);
+    let iri: string;
+    try {
+      iri = sparqlIri(uri);
+    } catch {
+      return undefined; // not an IRI: no such goal
+    }
+    const goals = await this.readWhere(`VALUES ?goal { ${iri} }`);
     return goals[0];
   }
 
@@ -558,29 +771,85 @@ export class GoalStack {
    */
   async migrateLongterm(now: Date = new Date()): Promise<number> {
     const session = this.sessionGraphUri();
-    const longterm = this.longtermGraphUri();
     this.registry.assertWritable(session);
-    this.registry.assertWritable(longterm);
+    this.registry.assertWritable(this.longtermGraphUri());
 
     const all = await this.readGraph(session);
     const eligible = all.filter(
       (g) =>
-        g.status === 'resolved' ||
-        g.longTerm === true ||
-        (g.deadline !== undefined && Date.parse(g.deadline) > now.getTime()),
+        g.goalType !== RESPOND_TO_USER &&
+        (g.status === 'resolved' ||
+          g.longTerm === true ||
+          (g.deadline !== undefined && Date.parse(g.deadline) > now.getTime())),
     );
-    if (eligible.length === 0) return 0;
-
-    for (const g of eligible) {
-      // A graph move: copy every triple of the goal, then delete the originals.
-      await this.triplestore.update(`
-        INSERT { GRAPH <${longterm}> { <${g.uri}> ?p ?o } }
-        WHERE  { GRAPH <${session}> { <${g.uri}> ?p ?o } }`);
-      await this.triplestore.update(`
-        DELETE { GRAPH <${session}> { <${g.uri}> ?p ?o } }
-        WHERE  { GRAPH <${session}> { <${g.uri}> ?p ?o } }`);
-    }
+    for (const g of eligible) await this.promoteToLongterm(g.uri);
     return eligible.length;
+  }
+
+  /**
+   * Move one goal from this session's graph to the longterm graph, preserving
+   * URI and provenance (a graph move: copy every triple, then delete the
+   * originals). Returns false when the goal is not in the session graph (it is
+   * already longterm, or unknown); the move is the same one `migrateLongterm`
+   * performs at session end.
+   */
+  async promoteToLongterm(goalId: GoalId): Promise<boolean> {
+    const session = this.sessionGraphUri();
+    const longterm = this.longtermGraphUri();
+    this.registry.assertWritable(session);
+    this.registry.assertWritable(longterm);
+    const res = await this.triplestore.query(`
+      SELECT ?p WHERE { GRAPH <${session}> { <${goalId}> <${COGT}goalId> ?p } } LIMIT 1`);
+    if ((res.bindings?.length ?? 0) === 0) return false;
+    await this.triplestore.update(`
+      INSERT { GRAPH <${longterm}> { <${goalId}> ?p ?o } }
+      WHERE  { GRAPH <${session}> { <${goalId}> ?p ?o } }`);
+    await this.triplestore.update(`
+      DELETE { GRAPH <${session}> { <${goalId}> ?p ?o } }
+      WHERE  { GRAPH <${session}> { <${goalId}> ?p ?o } }`);
+    // The long-term graph is shared by every user: a goal must not enter it
+    // without an owner, or it would be owner-only legacy (or worse, ambiguous).
+    // Keep an existing key; else derive it from the sender; else use the viewer.
+    const moved = await this.rawGoal(longterm, goalId);
+    if (moved && !moved.forUser) {
+      const owner = goalOwnerKey(moved) ?? this.viewer?.userId;
+      if (owner) await this.setOwner(goalId, owner);
+    }
+    return true;
+  }
+
+  /**
+   * Make a goal belong to `userKey` (replaces `cogt:forUser`). Used when the
+   * owner arms a goal: an armed goal is the owner's, never another user's.
+   */
+  async setOwner(goalId: GoalId, userKey: string): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    await this.replaceOne(graph, goalId, `${COGT}forUser`, `"${escapeLiteral(userKey)}"`);
+  }
+
+  /** One goal by IRI from a given graph, ignoring the viewer (internal). */
+  private async rawGoal(graph: string, uri: GoalId): Promise<Goal | undefined> {
+    return (await this.readGraph(graph, `VALUES ?goal { ${sparqlIri(uri)} }`))[0];
+  }
+
+  /**
+   * Point a goal at the inbound-utterance episode that mandates it (replaces any
+   * earlier mandate). The write does not validate the episode: callers check
+   * {@link isMandateValid} first, and the wake path re-checks it on every wake.
+   */
+  async setMandate(goalId: GoalId, mandatedBy: string, now: Date = new Date()): Promise<void> {
+    const graph = await this.graphOf(goalId);
+    if (!graph) return;
+    this.registry.assertWritable(graph);
+    await this.replaceOne(graph, goalId, `${COGT}mandatedBy`, `<${mandatedBy}>`);
+    await this.replaceOne(
+      graph,
+      goalId,
+      `${COGT}updatedAt`,
+      `"${now.toISOString()}"^^<${XSD}dateTime>`,
+    );
   }
 
   /** Replace (delete-then-insert) a single-valued predicate on a goal. */
@@ -590,11 +859,24 @@ export class GoalStack {
     predicate: string,
     objectTerm: string,
   ): Promise<void> {
-    await this.triplestore.update(`
+    await this.triplestore.update(this.replaceOps(graph, uri, [[predicate, objectTerm]]));
+  }
+
+  /**
+   * The delete-then-insert of single-valued predicates as ONE update: for each
+   * pair, in order, the old value is deleted and the new one inserted. Same
+   * result as one {@link replaceOne} per pair, in one write.
+   */
+  private replaceOps(graph: string, uri: GoalId, pairs: Array<[predicate: string, objectTerm: string]>): string {
+    const ops: string[] = [];
+    for (const [predicate, objectTerm] of pairs) {
+      ops.push(`
       DELETE { GRAPH <${graph}> { <${uri}> <${predicate}> ?old } }
       WHERE  { GRAPH <${graph}> { <${uri}> <${predicate}> ?old } }`);
-    await this.triplestore.update(`
+      ops.push(`
       INSERT DATA { GRAPH <${graph}> { <${uri}> <${predicate}> ${objectTerm} . } }`);
+    }
+    return ops.join(' ;');
   }
 
   /** Delete every value of a single-valued predicate on a goal (clears it). */
@@ -619,14 +901,14 @@ export class GoalStack {
     for (const graph of this.goalGraphs()) {
       out.push(...(await this.readGraph(graph, constraint)));
     }
-    return out;
+    return out.filter((g) => this.visible(g));
   }
 
   private async readGraph(graph: string, constraint = ''): Promise<Goal[]> {
     const sparql = `
       SELECT ?goal ?goalId ?goalType ?goalLabel ?status ?priority ?createdAt ?updatedAt
              ?successCriterion ?deadline ?resolvedAt ?abandonedAt ?blockedReason
-             ?parentGoal ?triggeredByEpisode ?triggeredByUser ?plannedSteps
+             ?parentGoal ?triggeredByEpisode ?triggeredByUser ?forUser ?plannedSteps
              ?currentStep ?stepProgress ?longTerm
              ?wakeAt ?wakeEvery ?mandatedBy ?servesDrive ?lastWakeAt ?wakeCount
              ?consecutiveFailures
@@ -649,6 +931,7 @@ export class GoalStack {
           OPTIONAL { ?goal <${COGT}parentGoal>         ?parentGoal . }
           OPTIONAL { ?goal <${COGT}triggeredByEpisode> ?triggeredByEpisode . }
           OPTIONAL { ?goal <${COGT}triggeredByUser>    ?triggeredByUser . }
+          OPTIONAL { ?goal <${COGT}forUser>            ?forUser . }
           OPTIONAL { ?goal <${COGT}plannedSteps>       ?plannedSteps . }
           OPTIONAL { ?goal <${COGT}currentStep>        ?currentStep . }
           OPTIONAL { ?goal <${COGT}stepProgress>       ?stepProgress . }
@@ -664,6 +947,7 @@ export class GoalStack {
       }`;
     const res = await this.triplestore.query(sparql);
     const tags = await this.tagsFor(graph);
+    const abouts = await this.aboutFor(graph);
     return (res.bindings ?? []).map((r) => {
       const uri = r.goal.value;
       const goal: Goal = {
@@ -686,10 +970,13 @@ export class GoalStack {
       if (r.parentGoal) goal.parentGoal = r.parentGoal.value;
       if (r.triggeredByEpisode) goal.triggeredByEpisode = r.triggeredByEpisode.value;
       if (r.triggeredByUser) goal.triggeredByUser = r.triggeredByUser.value;
+      if (r.forUser) goal.forUser = r.forUser.value;
       if (r.plannedSteps) goal.plannedSteps = r.plannedSteps.value;
       if (r.currentStep) goal.currentStep = r.currentStep.value;
       if (r.stepProgress) goal.stepProgress = r.stepProgress.value;
       if (r.longTerm) goal.longTerm = r.longTerm.value === 'true';
+      const about = abouts.get(uri);
+      if (about && about.length > 0) goal.about = about;
       if (r.wakeAt) goal.wakeAt = r.wakeAt.value;
       if (r.wakeEvery) goal.wakeEvery = r.wakeEvery.value;
       if (r.mandatedBy) goal.mandatedBy = r.mandatedBy.value;
@@ -699,6 +986,21 @@ export class GoalStack {
       if (r.consecutiveFailures) goal.consecutiveFailures = Number(r.consecutiveFailures.value);
       return goal;
     });
+  }
+
+  /** Multi-valued `cogt:aboutEntity`, grouped by goal IRI. */
+  private async aboutFor(graph: string): Promise<Map<string, string[]>> {
+    const res = await this.triplestore.query(`
+      SELECT ?goal ?a WHERE {
+        GRAPH <${graph}> { ?goal a <${COGT}Goal> ; <${COGT}aboutEntity> ?a }
+      }`);
+    const map = new Map<string, string[]>();
+    for (const r of res.bindings ?? []) {
+      const arr = map.get(r.goal.value) ?? [];
+      arr.push(r.a.value);
+      map.set(r.goal.value, arr);
+    }
+    return map;
   }
 
   /** Multi-valued `cogt:tags`, grouped by goal IRI. */

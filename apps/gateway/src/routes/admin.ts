@@ -1,10 +1,48 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import type { GatewayContext } from '../context.js';
-import { MessageEnvelope, resolveAgentId } from '@ontofelia/core';
+import { ALL_USERS_SCOPE, MessageEnvelope, OWNER_USER_KEY, resolveAgentId } from '@ontofelia/core';
+import { summarizeGoal } from '@ontofelia/agent-runtime';
+import { safeCompareSecret } from '@ontofelia/security';
 
 export default async function adminRoutes(fastify: FastifyInstance, ctx: GatewayContext) {
   const { agents, scheduler, webhookRegistry, sandboxAdapter,
-    skillRegistry, pluginRegistry } = ctx;
+    skillRegistry, pluginRegistry, config } = ctx;
+
+  // The inspect routes read every user's cycles, goals and episodes. The gateway
+  // has ONE credential, the bearer token, and it is the operator's: channel
+  // users never hold it. The global /api hook already checks it; the routes
+  // check it again and refuse to run at all when the gateway is configured
+  // without a token (auth.tokenRequired = false), so open access never reaches
+  // this data. On top of that the output is scoped to the owner's key unless
+  // the operator asks for `scope=all`.
+  const requireOwnerCredential = (
+    request: FastifyRequest,
+    reply: import('fastify').FastifyReply,
+  ): boolean => {
+    const header = request.headers.authorization;
+    const ok =
+      config.gateway.auth.tokenRequired === true &&
+      typeof header === 'string' &&
+      header.startsWith('Bearer ') &&
+      safeCompareSecret(header.split(' ')[1], config.gateway.token);
+    if (!ok) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return false;
+    }
+    return true;
+  };
+
+  // `scope` is absent (the owner's records) or exactly `all` (every user's).
+  // Anything else is refused rather than guessed.
+  const inspectScope = (
+    scope: string | undefined,
+    reply: import('fastify').FastifyReply,
+  ): string | undefined => {
+    if (scope === undefined) return OWNER_USER_KEY;
+    if (scope === ALL_USERS_SCOPE) return ALL_USERS_SCOPE;
+    reply.code(400).send({ error: 'scope must be omitted (owner records) or "all"' });
+    return undefined;
+  };
 
   fastify.post('/api/cron-trigger', async (request: FastifyRequest<{ Body: { message?: string; agentId?: string } }>) => {
     const { message = 'Cron-Wakeup: Du wurdest von einem geplanten Job geweckt.', agentId } = request.body || {};
@@ -33,71 +71,109 @@ export default async function adminRoutes(fastify: FastifyInstance, ctx: Gateway
   });
 
   // Cognitive debug panel (doc 09 §10). Read-only projections behind the
-  // cog.flagDebugPanel flag: 403 until an operator opts in. No route mutates
-  // the cognitive graphs.
+  // cog.flagDebugPanel flag: 403 until an operator opts in, and behind the
+  // owner credential (see requireOwnerCredential). Output is scoped to the
+  // owner's records unless `scope=all`. No route mutates the cognitive graphs.
   fastify.get('/api/cog/inspect/cycles', async (
-    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; limit?: string } }>,
+    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; limit?: string; scope?: string } }>,
     reply,
   ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const scope = inspectScope(request.query.scope, reply);
+    if (scope === undefined) return;
     const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId) return reply.code(400).send({ error: 'sessionId required' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
     const limit = request.query.limit ? Number(request.query.limit) : undefined;
-    return ins.listCycles(request.query.sessionId, limit);
+    return ins.listCycles(request.query.sessionId, scope, limit);
   });
 
   fastify.get('/api/cog/inspect/cycle', async (
-    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string } }>,
+    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string; scope?: string } }>,
     reply,
   ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const scope = inspectScope(request.query.scope, reply);
+    if (scope === undefined) return;
     const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId || !request.query.cycleId)
       return reply.code(400).send({ error: 'sessionId and cycleId required' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
-    const detail = await ins.getCycle(request.query.sessionId, request.query.cycleId);
+    const detail = await ins.getCycle(request.query.sessionId, request.query.cycleId, scope);
     if (!detail) return reply.code(404).send({ error: 'Cycle not found' });
     return detail;
   });
 
   fastify.get('/api/cog/inspect/goals', async (
-    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string } }>,
+    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; scope?: string } }>,
     reply,
   ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const scope = inspectScope(request.query.scope, reply);
+    if (scope === undefined) return;
     const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId) return reply.code(400).send({ error: 'sessionId required' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
-    return ins.listGoals(request.query.sessionId);
+    const now = new Date();
+    const goals = await ins.listGoals(request.query.sessionId, scope);
+    return goals.map((g) => {
+      const s = summarizeGoal(g, now);
+      return { ...g, nextAction: s.nextAction, waitingUntil: s.waitingUntil };
+    });
   });
 
   fastify.get('/api/cog/inspect/episodes', async (
-    request: FastifyRequest<{ Querystring: { agentId?: string; entity?: string; limit?: string } }>,
+    request: FastifyRequest<{ Querystring: { agentId?: string; entity?: string; limit?: string; scope?: string } }>,
     reply,
   ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const scope = inspectScope(request.query.scope, reply);
+    if (scope === undefined) return;
     const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
     const limit = request.query.limit ? Number(request.query.limit) : undefined;
-    return ins.listEpisodes(request.query.entity, limit);
+    return ins.listEpisodes(scope, request.query.entity, limit);
+  });
+
+  // Same data as the owner's /initiative chat command (flag, runaway counters,
+  // recent initiative cycles, notifications with suppression reason).
+  fastify.get('/api/cog/inspect/initiative', async (
+    request: FastifyRequest<{ Querystring: { agentId?: string; limit?: string } }>,
+    reply,
+  ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const agent = agents.get(resolveAgentId(request.query.agentId));
+    if (!agent) return reply.code(404).send({ error: 'Agent not found' });
+    const ins = await agent.cogInspector();
+    if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
+    const limit = request.query.limit ? Number(request.query.limit) : undefined;
+    const report = await agent.initiativeReport(new Date(), limit);
+    if (!report) return reply.code(503).send({ error: 'Cognitive architecture not active' });
+    return report;
   });
 
   fastify.get('/api/cog/inspect/explain', async (
-    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string } }>,
+    request: FastifyRequest<{ Querystring: { agentId?: string; sessionId?: string; cycleId?: string; scope?: string } }>,
     reply,
   ) => {
+    if (!requireOwnerCredential(request, reply)) return;
+    const scope = inspectScope(request.query.scope, reply);
+    if (scope === undefined) return;
     const agent = agents.get(resolveAgentId(request.query.agentId));
     if (!agent) return reply.code(404).send({ error: 'Agent not found' });
     if (!request.query.sessionId || !request.query.cycleId)
       return reply.code(400).send({ error: 'sessionId and cycleId required' });
     const ins = await agent.cogInspector();
     if (!ins) return reply.code(403).send({ error: 'Cognitive debug panel disabled' });
-    return ins.explainResponse(request.query.sessionId, request.query.cycleId);
+    return ins.explainResponse(request.query.sessionId, request.query.cycleId, scope);
   });
 
   fastify.get('/api/skills', async () => {

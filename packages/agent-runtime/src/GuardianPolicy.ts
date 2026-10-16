@@ -90,16 +90,30 @@ export class GuardianPolicy {
     { label: 'write to /etc', pattern: /(?:>|\btee\b[^|;&\n]*)\s*\/etc\//i },
   ];
 
-  static requiresApproval(toolName: string, input: unknown): { required: boolean; reason?: string } {
-    let textToTest = '';
-    if (toolName === 'exec') {
-      textToTest = (input as { command?: string })?.command || '';
-    } else if (toolName === 'cron_manage') {
+  /** Per guarded tool: the text of an invocation the patterns are tested against. */
+  private static TEXT_OF_INPUT: Record<string, (input: unknown) => string> = {
+    exec: (input) => (input as { command?: string })?.command || '',
+    cron_manage: (input) => {
       const payload = input as { label?: string; wakeMessage?: string };
-      textToTest = `${payload?.label || ''} ${payload?.wakeMessage || ''}`;
-    } else {
-      return { required: false };
-    }
+      return `${payload?.label || ''} ${payload?.wakeMessage || ''}`;
+    },
+  };
+
+  /**
+   * The tools whose invocations the Guardian can gate behind an approval (the
+   * keys of {@link TEXT_OF_INPUT}); the single source for "which tools may need
+   * approval". Whether a given call does depends on its input.
+   */
+  static guardedTools(): string[] {
+    return Object.keys(GuardianPolicy.TEXT_OF_INPUT);
+  }
+
+  static requiresApproval(toolName: string, input: unknown): { required: boolean; reason?: string } {
+    const extract = Object.prototype.hasOwnProperty.call(GuardianPolicy.TEXT_OF_INPUT, toolName)
+      ? GuardianPolicy.TEXT_OF_INPUT[toolName]
+      : undefined;
+    if (!extract) return { required: false };
+    const textToTest = extract(input);
 
     const match = this.DANGEROUS_PATTERNS.find(p => p.pattern.test(textToTest));
     if (match) {

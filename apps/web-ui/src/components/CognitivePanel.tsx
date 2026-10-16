@@ -7,18 +7,20 @@ import {
   fetchCogEpisodes,
   fetchCogExplain,
   fetchCogGoals,
+  fetchCogInitiative,
   type CogCycleDetail,
   type CogCycleSummary,
   type CogEpisode,
   type CogExplanation,
   type CogGoal,
+  type CogInitiativeReport,
 } from '../lib/api';
 
 interface CognitivePanelProps {
   onClose: () => void;
 }
 
-type Tab = 'cycles' | 'goals' | 'episodes';
+type Tab = 'cycles' | 'goals' | 'episodes' | 'initiative';
 
 const card: React.CSSProperties = {
   border: '1px solid var(--color-border)',
@@ -58,6 +60,7 @@ export function CognitivePanel({ onClose }: CognitivePanelProps) {
   const [explanation, setExplanation] = useState<CogExplanation | null>(null);
   const [goals, setGoals] = useState<CogGoal[]>([]);
   const [episodes, setEpisodes] = useState<CogEpisode[]>([]);
+  const [initiative, setInitiative] = useState<CogInitiativeReport | null>(null);
   const [entityFilter, setEntityFilter] = useState('');
 
   useEffect(() => {
@@ -95,6 +98,8 @@ export function CognitivePanel({ onClose }: CognitivePanelProps) {
     } else if (next === 'goals') {
       if (!activeSessionId) return;
       void guard(() => fetchCogGoals(token, activeSessionId), setGoals);
+    } else if (next === 'initiative') {
+      void guard(() => fetchCogInitiative(token), setInitiative);
     } else {
       void guard(() => fetchCogEpisodes(token, entityFilter || undefined), setEpisodes);
     }
@@ -204,7 +209,7 @@ export function CognitivePanel({ onClose }: CognitivePanelProps) {
             flexShrink: 0,
           }}
         >
-          {(['cycles', 'goals', 'episodes'] as Tab[]).map((t) => {
+          {(['cycles', 'goals', 'episodes', 'initiative'] as Tab[]).map((t) => {
             const active = tab === t;
             return (
               <button
@@ -257,6 +262,8 @@ export function CognitivePanel({ onClose }: CognitivePanelProps) {
             />
           ) : tab === 'goals' ? (
             <GoalsView sessionId={activeSessionId} goals={goals} />
+          ) : tab === 'initiative' ? (
+            <InitiativeView report={initiative} />
           ) : (
             <EpisodesView
               episodes={episodes}
@@ -372,7 +379,7 @@ function CyclesView({
                     backgroundColor: 'var(--color-surface)',
                   }}
                 >
-                  {p.ordinal}. {p.phaseKind}
+                  {p.phaseIndex}. {p.phaseKind}{p.phaseStatus && p.phaseStatus !== 'completed' ? ` (${p.phaseStatus})` : ''}
                 </span>
               ))}
             </div>
@@ -409,16 +416,26 @@ function CyclesView({
 
             {explanation && (
               <div style={{ ...card, marginTop: 'var(--space-3)', borderColor: 'var(--color-primary, #6366f1)' }}>
-                <div style={label}>Why this response — WM → action → goal → episode</div>
+                <div style={label}>Why this response — response → action → goal → WM → episode</div>
+                {explanation.response && (
+                  <div style={{ fontSize: 'var(--font-size-sm)', marginTop: 'var(--space-2)' }}>
+                    response: {explanation.response.payload}
+                  </div>
+                )}
                 {explanation.actions.length === 0 ? (
                   <Empty text="No action entries to explain." />
                 ) : (
                   explanation.actions.map((a) => (
                     <div key={a.entryId} style={{ marginTop: 'var(--space-2)' }}>
-                      <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600 }}>action: {a.payload}</div>
-                      {a.goal && <div style={mono}>↳ goal: {a.goal.goalLabel} ({a.goal.status})</div>}
+                      <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600 }}>
+                        action: {a.toolName ?? a.payload}
+                        {a.outcome ? ` → ${a.outcome === 'success' ? 'ok' : 'error'}${a.denialClass ? ` (${a.denialClass})` : ''}` : ''}
+                        {a.durationMs !== undefined ? `, ${a.durationMs} ms` : ''}
+                      </div>
+                      {a.args !== undefined && <div style={mono}>↳ args: {a.args || '(none)'}</div>}
+                      {a.goal && <div style={mono}>↳ goal: {a.goal.goalLabel} ({a.goal.goalStatus})</div>}
                       {a.triggeringEpisode && (
-                        <div style={mono}>↳ triggered by: {a.triggeringEpisode.payload ?? a.triggeringEpisode.episodeId}</div>
+                        <div style={mono}>↳ triggered by: {a.triggeringEpisode.payload ?? a.triggeringEpisode.uri}</div>
                       )}
                     </div>
                   ))
@@ -429,7 +446,7 @@ function CyclesView({
                     {explanation.retrievals.map((r) => (
                       <div key={r.entryId} style={mono}>
                         • {r.payload}
-                        {r.episode ? ` ← ${r.episode.episodeId}` : ''}
+                        {r.episode ? ` ← ${r.episode.uri}` : ''}
                       </div>
                     ))}
                   </div>
@@ -458,10 +475,68 @@ function GoalsView({ sessionId, goals }: { sessionId: string | null; goals: CogG
             </span>
           </div>
           <div style={mono}>{fmt(g.createdAt)}</div>
+          {g.nextAction && <div style={{ fontSize: 'var(--font-size-xs)' }}>next: {g.nextAction}</div>}
+          {g.waitingUntil && <div style={mono}>waiting until {fmt(g.waitingUntil)}</div>}
           {g.successCriterion && <div style={{ fontSize: 'var(--font-size-xs)' }}>✓ {g.successCriterion}</div>}
           {g.triggeredByEpisode && <div style={mono}>← {g.triggeredByEpisode}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+function InitiativeView({ report }: { report: CogInitiativeReport | null }) {
+  if (!report) return <Empty text="No initiative data." />;
+  const { counters } = report;
+  return (
+    <div>
+      <div style={card}>
+        <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600 }}>
+          Initiative: {report.enabled ? 'ON' : 'OFF'} <span style={mono}>(flagInitiative)</span>
+        </div>
+        {counters && (
+          <div style={mono}>
+            {counters.inHour}/{counters.maxPerHour} in the last hour · {counters.inDay}/{counters.maxPerDay} in the
+            last 24h (caps are defaults)
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...label, margin: 'var(--space-3) 0 var(--space-2)' }}>
+        Recent initiative cycles ({report.episodes.length})
+      </div>
+      {report.episodes.length === 0 ? (
+        <Empty text="None." />
+      ) : (
+        report.episodes.map((e, i) => (
+          <div key={`${e.at}-${i}`} style={card}>
+            <div style={mono}>
+              {fmt(e.at)}
+              {e.outcome && e.outcome !== 'success' ? ` · ${e.outcome}` : ''}
+            </div>
+            <div style={{ fontSize: 'var(--font-size-sm)' }}>{e.why}</div>
+          </div>
+        ))
+      )}
+
+      <div style={{ ...label, margin: 'var(--space-3) 0 var(--space-2)' }}>
+        Recent notifications ({report.notifications.length})
+      </div>
+      {report.notifications.length === 0 ? (
+        <Empty text="None." />
+      ) : (
+        report.notifications.map((n, i) => (
+          <div key={`${n.at}-${i}`} style={card}>
+            <div style={mono}>
+              {fmt(n.at)}
+              {n.priority ? ` · priority ${n.priority}` : ''}
+            </div>
+            <div style={{ fontSize: 'var(--font-size-sm)' }}>
+              {n.delivered ? 'delivered' : `suppressed: ${n.reason}`}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

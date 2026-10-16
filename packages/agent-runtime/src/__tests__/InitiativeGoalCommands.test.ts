@@ -136,7 +136,7 @@ describe('/goals and /initiative observability commands', () => {
       expect(res.text).toContain('blocked');
       expect(res.text).toContain('waiting for approval');
       expect(res.text).toContain('Curiosity');
-      expect(res.text).toContain('next wake');
+      expect(res.text).toContain('waiting until'); // active goal with a future wake
       expect(res.text).toContain('draft the intro');
     });
 
@@ -164,6 +164,39 @@ describe('/goals and /initiative observability commands', () => {
       expect(res.text).toContain('within per-goal cooldown'); // initiative episode reason
       expect(res.text).toContain('sent'); // delivered notification
       expect(res.text).toContain('suppressed: daily-cap'); // suppressed notification reason
+    });
+
+    it('initiativeReport() returns the structured data the chat text is rendered from', async () => {
+      const now = new Date();
+      await seedInitiative(now);
+      const report = await runtime.initiativeReport(now);
+      expect(report).toEqual({
+        enabled: false,
+        counters: { inHour: 2, maxPerHour: 4, inDay: 2, maxPerDay: 24 },
+        episodes: [{
+          at: expect.any(String),
+          why: 'initiative skipped for goal "Write weekly report": within per-goal cooldown (30 min)',
+          outcome: 'success',
+        }],
+        notifications: [
+          { at: expect.any(String), delivered: false, reason: 'daily-cap', priority: 'low' },
+          { at: expect.any(String), delivered: true, reason: 'sent', priority: 'high' },
+        ],
+      });
+
+      const res = await runtime.handleMessage(env('/initiative', true));
+      const text = res.text;
+      expect(text).toContain(`Runaway counter: ${report!.counters!.inHour}/${report!.counters!.maxPerHour} in the last hour`);
+      expect(text).toContain(`Recent initiative cycles (${report!.episodes.length})`);
+      expect(text).toContain(`Recent notifications (${report!.notifications.length})`);
+      for (const e of report!.episodes) expect(text).toContain(`(${e.at}): ${e.why}`);
+      for (const n of report!.notifications) {
+        expect(text).toContain(`(${n.at}): notification ${n.delivered ? 'sent' : `suppressed: ${n.reason}`} (priority ${n.priority})`);
+      }
+    });
+
+    it('initiativeReport() is undefined without a knowledge engine', async () => {
+      expect(await makeRuntime(false).initiativeReport()).toBeUndefined();
     });
 
     it('on/off flips flagInitiative (asserted via CognitiveConfig)', async () => {

@@ -5,9 +5,9 @@ import fastifyStatic from '@fastify/static';
 import { OntofeliaConfig } from '@ontofelia/config';
 import { createLogger, AgentConfig, ChannelType, ChannelBinding, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import { SessionStore } from '@ontofelia/session-store';
-import { AgentRuntime, InitiativeService, LoggingNotificationSink, NotificationService, INITIATIVE_JOB_PREFIX } from '@ontofelia/agent-runtime';
-import type { InitiativeSessionPort, NotificationChannelPort, NotificationSink } from '@ontofelia/agent-runtime';
-import { NotifyOwnerTool } from '@ontofelia/tools';
+import { AgentRuntime, InitiativeService, NotificationService, INITIATIVE_JOB_PREFIX } from '@ontofelia/agent-runtime';
+import type { InitiativeSessionPort, NotificationChannelPort } from '@ontofelia/agent-runtime';
+import { NotifyOwnerTool, ListGoalsTool, ArmGoalTool, UpdateGoalStepTool } from '@ontofelia/tools';
 import type { SessionOrigin } from '@ontofelia/core';
 import { resolveOwnerTarget } from './services/notificationTarget.js';
 import { MockProvider } from '@ontofelia/testkit';
@@ -192,6 +192,9 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   const bootstrapDir = path.resolve(currentDir, '..', '..', '..', 'bootstrap');
   const defaultAgent = new AgentRuntime(PRIMARY_AGENT_ID, defaultAgentConfig, provider, sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, config.provider as import('@ontofelia/core').ProviderConfig, knowledgeEngine, bootstrapDir);
   await defaultAgent.initialize();
+  // The agent's state directory (the parent of its sessions) holds the key of the
+  // digests of masked tool arguments.
+  defaultAgent.setStateDir(path.dirname(agentsPath));
 
   const agents = new Map<string, AgentRuntime>();
   agents.set(PRIMARY_AGENT_ID, defaultAgent);
@@ -201,8 +204,7 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     await initChannels(config, agents);
 
   // --- Owner notification (docs/initiative-architecture.md §7) ---
-  // The governed notification layer. It is the real NotificationSink for
-  // initiative cycles AND backs the notify_owner tool. Constructed here (after
+  // The governed notification layer. It backs the notify_owner tool. Constructed here (after
   // channels) because it needs the channel registry + allowlist to resolve and
   // reach the owner's Telegram chat. Delivery target resolution order:
   //   config.notifications.target ?? channels.telegram.ownerChatId
@@ -254,13 +256,12 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   // is composed after the tool registry). getAllowedTools reads the registry
   // live, so a late registration is picked up on the next message.
   toolRegistry.register(new NotifyOwnerTool(notificationService));
+  // list_goals reads the same grounded goal summaries as /goals, per agent.
+  toolRegistry.register(new ListGoalsTool({
+    openGoals: async ({ agentId, sessionId }) => agents.get(agentId)?.openGoalSummaries(sessionId),
+  }));
   // Surface the "while you were away" digest on the next owner conversation.
   defaultAgent.setDigestSource(notificationService);
-  // Use the real sink for initiative cycles only when a telegram channel exists;
-  // otherwise fall back to the no-op logging sink (design §7).
-  const notificationSink: NotificationSink = config.channels.telegram?.enabled
-    ? notificationService
-    : new LoggingNotificationSink();
 
   // --- Scheduler ---
   const { JobScheduler, WebhookRegistry } = await import('@ontofelia/scheduler');
@@ -311,9 +312,32 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     dispatch: async (envelope) => {
       await defaultAgent.handleMessage(envelope);
     },
-    notificationSink,
     session: initiativeSessionPort,
   });
+
+  // arm_goal gives an owner-requested goal a mandate and a wake, then schedules
+  // the wake through the InitiativeService (docs/initiative-architecture.md §9).
+  toolRegistry.register(new ArmGoalTool({
+    arm: async (req) =>
+      agents.get(req.agentId)?.armGoal(req, (goal) => initiativeService.registerGoalWake(goal)),
+  }));
+
+  // update_goal_step records progress on a goal; an unattended initiative cycle
+  // may touch only the goal it was woken for (docs/initiative-architecture.md §9).
+  toolRegistry.register(new UpdateGoalStepTool({
+    update: async (req) => agents.get(req.agentId)?.updateGoalStep(req),
+  }));
+
+  // The self-model was derived at initialize(), before the tools above existed:
+  // derive it again now that the registry is complete (a no-op with the
+  // self-model flag off). Later changes are picked up before the next cycle.
+  await defaultAgent
+    .seedDerivedSelfModelIfEnabled()
+    .catch((e) => logger.warn('Self-model derivation after tool registration failed: ' + (e as Error).message));
+
+  // The weekly metacognitive scan runs the worldview reflection for the owner
+  // with the same conflict detector the reflection endpoint uses.
+  defaultAgent.setConflictDetector(conflictDetector);
 
   scheduler.onJob(async (job) => {
     // Initiative wakes are routed to the InitiativeService, which enforces the
@@ -367,6 +391,8 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   const cogJobDefaults = [
     { name: 'cog.retention', cron: '0 3 * * *', prompt: '/cog retain' },
     { name: 'cog.consolidation', cron: '0 */6 * * *', prompt: '/cog consolidate' },
+    { name: 'cog.cleanup', cron: '30 3 * * *', prompt: '/cog cleanup' },
+    { name: 'cog.consolidate-episodes', cron: '45 3 * * *', prompt: '/cog consolidate-episodes' },
     { name: 'cog.metacog-scan', cron: '0 4 * * 0', prompt: '/cog scan' },
   ];
   const existingCogNames = new Set(scheduler.listCronJobs().map((j) => j.name));

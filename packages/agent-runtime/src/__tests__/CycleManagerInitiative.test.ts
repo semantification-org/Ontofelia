@@ -43,7 +43,7 @@ describe('CycleManager — initiative mode', () => {
   beforeEach(async () => {
     store = await makeStore();
     registry = GraphRegistry.create([AGENT]);
-    cm = new CycleManager(store, registry, AGENT);
+    cm = new CycleManager(store, registry, AGENT, undefined, { awaitPersist: true });
   });
 
   it('does NOT seed RESPOND_TO_USER and records an initiative episode', async () => {

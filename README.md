@@ -133,6 +133,16 @@ EVAL_PROVIDER=openrouter EVAL_MODELS="deepseek/deepseek-v4-flash,openai/gpt-4o-m
 - Context assembly from Named Graphs (`user`, `identity`, `soul`)
 - Session persistence with JSONL transcripts + SQLite index
 
+### 🧩 Cognitive Layer
+- A per-message cognitive cycle on top of the knowledge graph: working memory, episodic memory with per-user recall, a goal stack, learned skills, metacognition and a queryable self-model, all stored as RDF in named graphs
+- **On by default for new installs; existing installs keep their current settings** and opt in with the owner command `/cog defaults apply` (`/cog defaults` shows the difference first)
+- **Retention stays off.** The retention sweep deletes old episode payloads, so it is never part of the defaults. The initiative flag (self-started work, which makes model calls of its own) stays off as well
+- The default-on set adds no model call per message: it uses SPARQL and rules only
+- The reasoning in the graph is **OWL 2 RL materialisation** (Reasonable), not an OWL-DL reasoner, and there is no consistency check
+- **Rollback:** `/cog flag <name> off` turns one flag off, `/cog cycle off` turns the whole layer off, with no restart. Nothing is deleted by turning it off: episodes, goals, skills and the other records stay in the store and are read again when you switch back on. Only `/cog cleanup`, the retention sweep (if you enable it) or a factory reset removes them. The episodic graph holds the message text of every user
+- **Upgrading:** nothing changes for an existing install. `/cog health` (owner only) reports soak numbers: persist latency p50 and p95, graph sizes, the impasse rate and dumps per turn
+- Details: [Cognitive Architecture](docs/cognitive-architecture/README.md), flags, rollout and rollback in [doc 09](docs/cognitive-architecture/09-integration-and-migration.md)
+
 ### 🔧 Tools & Security
 - 8 memory tools: `memory_store`, `memory_query`, `memory_ask`, `memory_explain`, `memory_retract`, `memory_reflect`, `ontology_inspect`, `ontology_propose`
 - System tools: `datetime`, `calculator`, `exec`, `fs_read`, `fs_write`, `fs_list`, `web_fetch`, `cron_manage`
@@ -361,6 +371,9 @@ ontofelia/
 | [CLI Reference](docs/cli.md) | All CLI commands |
 | [Deployment](docs/deployment.md) | Production deployment guide |
 | [Interface Contracts](docs/interfaces.md) | TypeScript interfaces for all adapter boundaries |
+| [Cognitive Architecture](docs/cognitive-architecture/README.md) | The cognitive layer: specification, flags, default-on rollout, rollback, migration |
+| [Initiative Architecture](docs/initiative-architecture.md) | Governed autonomy: goal wakes, mandates, guards, owner notification |
+| [Initiative Demo](docs/demo-initiative.md) | Operator walkthrough: give the agent a goal, let it wake and work on its own |
 | [Known Gaps](docs/known_gaps.md) | Current limitations and planned improvements |
 | [Known Limitations](docs/known-limitations.md) | Correctness & scaling limitations with tracking tickets |
 

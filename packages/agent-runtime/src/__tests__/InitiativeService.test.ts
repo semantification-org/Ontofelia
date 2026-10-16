@@ -33,6 +33,7 @@ async function seedOwnerMandate(store: TriplestoreAdapter): Promise<string> {
   return new EpisodicMemory(store, AGENT).append({
     episodeType: 'message-received',
     actor: OWNER_ACTOR,
+    actorIsOwner: true,
     payload: 'keep working on this and report when done',
     occurredAt: new Date('2026-05-01T00:00:00.000Z'),
   });

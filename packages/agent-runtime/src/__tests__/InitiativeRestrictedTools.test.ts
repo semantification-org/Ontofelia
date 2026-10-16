@@ -5,7 +5,7 @@ import {
   ChannelType, ChannelBinding, ToolDefinition, ToolContext, ToolResult,
 } from '@ontofelia/core';
 import { SessionStore } from '@ontofelia/session-store';
-import { ToolRegistry, AuditLog, NotifyOwnerTool, type OwnerNotifier } from '@ontofelia/tools';
+import { ToolRegistry, AuditLog, NotifyOwnerTool, ArmGoalTool, type OwnerNotifier } from '@ontofelia/tools';
 import { ToolPolicyEngine } from '@ontofelia/security';
 import { SkillRegistry, SkillExecutor } from '@ontofelia/skills';
 import { PluginRegistry } from '@ontofelia/plugins';
@@ -108,6 +108,7 @@ describe('initiative restricted tool set (getAllowedTools)', () => {
     toolRegistry.register(fakeTool('cron_manage', 'shell', { hostOnly: true }));
     toolRegistry.register(fakeTool('memory_retract', 'memory'));
     toolRegistry.register(new NotifyOwnerTool(fakeNotifier));
+    toolRegistry.register(new ArmGoalTool({ arm: async () => undefined }));
     const toolPolicy = new ToolPolicyEngine({ allow: [], deny: [] });
     const auditLog = new AuditLog(`/tmp/ontofelia-restricted-workspace-${sid}`);
     const skillRegistry = new SkillRegistry();
@@ -160,6 +161,15 @@ describe('initiative restricted tool set (getAllowedTools)', () => {
     expect(names).not.toContain('memory_retract');
     // L2: memory_query is default-deny (dead unattended) and removed from the set.
     expect(names).not.toContain('memory_query');
+  });
+
+  it('arm_goal is advertised to the owner only, never to non-owners or initiative cycles', async () => {
+    await runtime.handleMessage(convEnv(true));
+    expect(toolNames(provider)).toContain('arm_goal');
+    await runtime.handleMessage(convEnv(false));
+    expect(toolNames(provider)).not.toContain('arm_goal');
+    await runtime.handleMessage(initiativeEnv());
+    expect(toolNames(provider)).not.toContain('arm_goal');
   });
 
   it('H2: notify_owner is hidden from a non-owner conversational caller', async () => {

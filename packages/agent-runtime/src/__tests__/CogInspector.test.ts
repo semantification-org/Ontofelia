@@ -105,7 +105,7 @@ describe('CogInspector', () => {
   });
 
   it('lists cycles newest-first', async () => {
-    const cycles = await inspector.listCycles(SESSION);
+    const cycles = await inspector.listCycles(SESSION, 'all');
     expect(cycles.map((c) => c.cycleId)).toEqual(['cyc2', 'cyc1']);
     const c1 = cycles.find((c) => c.cycleId === 'cyc1')!;
     expect(c1.status).toBe('completed');
@@ -113,9 +113,9 @@ describe('CogInspector', () => {
   });
 
   it('returns full cycle detail: phases, buffer, episodes, marker', async () => {
-    const d = await inspector.getCycle(SESSION, 'cyc1');
+    const d = await inspector.getCycle(SESSION, 'cyc1', 'all');
     expect(d).toBeDefined();
-    expect(d!.phases.map((p) => p.ordinal)).toEqual([1, 3]);
+    expect(d!.phases.map((p) => p.phaseIndex)).toEqual([1, 3]);
     expect(d!.phases[0].phaseKind).toBe('perception');
     expect(d!.buffer.length).toBe(2);
     expect(d!.episodes.map((e) => e.uri)).toEqual([episodeUri]);
@@ -123,22 +123,22 @@ describe('CogInspector', () => {
   });
 
   it('returns undefined for an unknown cycle', async () => {
-    expect(await inspector.getCycle(SESSION, 'nope')).toBeUndefined();
+    expect(await inspector.getCycle(SESSION, 'nope', 'all')).toBeUndefined();
   });
 
   it('lists goals and recent episodes', async () => {
-    const goals = await inspector.listGoals(SESSION);
+    const goals = await inspector.listGoals(SESSION, 'all');
     expect(goals.map((g) => g.uri)).toContain(goalUri);
 
-    const all = await inspector.listEpisodes();
+    const all = await inspector.listEpisodes('all');
     expect(all.map((e) => e.uri)).toContain(episodeUri);
 
-    const byEntity = await inspector.listEpisodes('urn:entity:weather');
+    const byEntity = await inspector.listEpisodes('all', 'urn:entity:weather');
     expect(byEntity.map((e) => e.uri)).toEqual([episodeUri]);
   });
 
   it('explains the response chain: action → goal → episode', async () => {
-    const exp = await inspector.explainResponse(SESSION, 'cyc1');
+    const exp = await inspector.explainResponse(SESSION, 'cyc1', 'all');
     expect(exp.found).toBe(true);
     expect(exp.actions.length).toBe(1);
     const a = exp.actions[0];
@@ -150,7 +150,7 @@ describe('CogInspector', () => {
   });
 
   it('reports not-found for a cycle with no working memory', async () => {
-    const exp = await inspector.explainResponse(SESSION, 'cyc2');
+    const exp = await inspector.explainResponse(SESSION, 'cyc2', 'all');
     expect(exp.found).toBe(false);
     expect(exp.actions).toEqual([]);
   });

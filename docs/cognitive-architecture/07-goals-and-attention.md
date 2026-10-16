@@ -361,4 +361,75 @@ export interface GoalInput {
       stale? *Recommendation:* metacog produces a `cogt:stalenessWarning`
       reflective marker → enters next-cycle metaBuffer → surfaces in prompt.
 
+## 10. Implementation notes: lifecycle and episodes (goal stack flag on)
+
+Everything below applies only while `flagGoalStack` is on; with it off no goal
+is read or written.
+
+**Goal types.** Registered in the TBox as subclasses of `cogt:GoalType`:
+`RespondToUser` (implicit), `AnswerQuestion`, `ExecuteCommand`, `HandleRequest`,
+`AnswerInTopic`, `OwnerRequestedWork`, plus the reserved `ResolveConflict` and
+`CompletePlan` (never created yet).
+
+| Perception intent | Goal created |
+|---|---|
+| question | `AnswerQuestion` |
+| command | `ExecuteCommand` |
+| request | `HandleRequest` |
+| topic-reference | `AnswerInTopic` |
+| chit-chat, feedback | none (the implicit `RespondToUser` goal serves the turn) |
+
+**Decision tree, steps 1-2 (per turn, over the sender's own goals only).**
+
+1. A satisfaction cue resolves the top goal, a cancel cue abandons it. The cue
+   lists live in `GoalLifecycle.ts` (`SATISFACTION_CUES`, `CANCEL_CUES`). A cue
+   counts only as a whole short message (at most seven words, cue plus filler
+   words such as "thanks", "bitte"), never with a question mark. Plain thanks
+   is not a cue: it often comes in the middle of a task, so the message must
+   also say that it is done ("thanks, that's it", "passt", "erledigt", "das
+   wars"). Cancel: "nevermind", "forget it", "vergiss es", "stop", "abbrechen".
+   A cue with nothing to close creates no goal. Goals armed by the owner (with a
+   mandate or a wake) are closed through their tools only.
+2. If the entities the message is about (`about` of the perception) overlap the
+   entities stored on a goal (`cogt:aboutEntity`, written when the goal was
+   created), that goal is continued. Otherwise the intent creates a new goal per
+   the table. A message without entities that asks for the same goal type as the
+   latest goal is a follow-up and continues it. Anything else keeps the earlier
+   behaviour (continue an active goal, else the implicit goal).
+
+**Competition.** When goals compete the most recent intent (newest goal) wins;
+priority no longer decides. A `cogt:ChooseGoal` record in the cycle graph names
+the `winner`, the `loser`s and the rule (`chosenBecause`), with `forUser`. The
+losers stay active; they end by a cue, a tool, the supersession below or a
+later cleanup.
+
+**Superseded losers.** One turn of the session and user is counted when a turn's
+records are written (queued persist). A goal that the decision tree created from
+an intent (`AnswerQuestion`, `ExecuteCommand`, `HandleRequest`, `AnswerInTopic`),
+that is not the turn's winner and was neither chosen nor touched (its `updatedAt`
+unchanged) for N turns is set to `abandoned` with the reason
+"superseded by newer intent". N is the setup key `goalSupersedeAfterTurns`
+(integer 1 to 1000, default 10). The goal-abandoned episode is written for the
+goal's owner (`forUser`) while episodic memory is on, its text carrying the
+reason. Goals with a mandate or a wake, long-term goals and every other goal type
+are never superseded. The bookkeeping is in memory: a goal counts from the turn
+this process first read it, so a restart only delays an abandonment. Gated by
+`flagGoalStack`; without it nothing is read or written.
+
+**Episodes.** Every transition writes `goal-pushed`, `goal-resolved`,
+`goal-abandoned` or `goal-blocked` with `partOfGoal` and `forUser` (the goal's
+owner key), only while `flagEpisodicMemory` is on. Inside a cycle they are
+written by the queued persist; transitions by `update_goal_step`, `arm_goal` and
+an initiative failure write their episode directly. The implicit goal has no
+episodes.
+
+**goalBuffer.** The top goal has salience 1.0; its parents 0.7, minus 0.1 for
+each further level, never below 0.3.
+
+**Implicit goal hygiene.** The implicit goal of a cycle is resolved when the
+cycle's records are written, and resolved implicit goals never move to the
+long-term graph. On the first touch of a session by a process, active implicit
+goals of the sender that are older than the cycle are resolved; no migration is
+needed.
+
 Continue with [`08-metacognition-and-self-model.md`](08-metacognition-and-self-model.md).

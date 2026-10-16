@@ -38,6 +38,8 @@ export function ChatInput() {
     { cmd: '/new', desc: 'Start a new session' },
     { cmd: '/reset', desc: 'Reset current session' },
     { cmd: '/status', desc: 'Show gateway status' },
+    { cmd: '/goals', desc: 'Show goals and next actions' },
+    { cmd: '/initiative', desc: 'Show initiative state and recent cycles' },
     { cmd: '/help', desc: 'Show available commands' }
   ];
 

@@ -22,6 +22,14 @@ export class GraphUriResolver {
   }
 
   /**
+   * Prefix of the nodes the derived self-model owns inside the self graph
+   * (`SelfModel.reseedDerived`). The legacy persona rendering skips them.
+   */
+  static getSelfDerivedPrefix(agentId: string): string {
+    return `urn:${agentId}:self#derived/`;
+  }
+
+  /**
    * Available tools and MCP services for the agent.
    */
   static getSkillsGraph(agentId: string): string {

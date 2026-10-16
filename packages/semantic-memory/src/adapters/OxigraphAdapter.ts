@@ -21,6 +21,15 @@ import { turtleTerm, type TurtleTermInput } from '../utils/TurtleSyntax.js';
  * To still provide persistence we serialise the whole dataset to an
  * N-Quads file inside `dataDir` and reload it on startup. Every mutating
  * operation flushes back to that file.
+ *
+ * Persistence model: a mutating call changes the in-memory store, then awaits a
+ * flush (full N-Quads dump, temp file, atomic rename). Flushes run one at a
+ * time. Concurrent writes that arrive before a queued flush has started share
+ * that flush, so a burst of N writes costs one or two dumps instead of N. Each
+ * caller's promise still resolves only after a flush that started after its own
+ * write has completed, so durability is "after the awaited write resolves".
+ * A crash before that point loses the in-flight writes, as it always did. See
+ * `flush()` for the exact guarantee and the error behaviour.
  */
 export class OxigraphAdapter implements TriplestoreAdapter {
   readonly backend = 'oxigraph';
@@ -65,9 +74,62 @@ export class OxigraphAdapter implements TriplestoreAdapter {
     this.status = 'running';
   }
 
-  /** Serialise the full dataset back to disk. */
-  private async flush(): Promise<void> {
+  /** Tail of the flush queue: writers share one temp file, so flushes must not overlap. */
+  private flushTail: Promise<void> = Promise.resolve();
+
+  /**
+   * The flush that is queued but has not started yet, if any. A write that
+   * arrives while it is set joins it instead of queueing another flush.
+   */
+  private pendingFlush: Promise<void> | null = null;
+
+  /**
+   * Serialise the full dataset back to disk, coalescing concurrent requests.
+   *
+   * Guarantee (the durability contract for callers): every caller mutates the
+   * in-memory store first, synchronously, and only then calls flush(). The
+   * promise it gets back resolves only after a flush that STARTED after that
+   * mutation has COMPLETED (dump, write and rename). Why this holds:
+   *  - a flush marks itself as started (clears `pendingFlush`) immediately
+   *    before it dumps, in the same synchronous step, so every write that
+   *    joins a pending flush happened before that dump and is part of it;
+   *  - a write that comes after the dump has started finds no pending flush and
+   *    queues a new one, which runs after the current one (flushes never
+   *    overlap and share one temp file);
+   *  - the dump always reads the latest state, so the last flush to finish
+   *    leaves the latest state on disk.
+   * If a flush fails, every caller that joined it gets the rejection; the next
+   * write queues a fresh flush and tries again.
+   *
+   * Durability is "after the awaited write resolves". A crash before that
+   * loses the in-flight writes, exactly as before coalescing.
+   */
+  private flush(): Promise<void> {
+    if (this.pendingFlush) return this.pendingFlush;
+    const run = this.flushTail.then(() => {
+      this.pendingFlush = null; // started: later writes need their own flush
+      return this.flushNow();
+    });
+    this.pendingFlush = run;
+    this.flushTail = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Number of full-dataset dumps written to disk since this adapter started. */
+  private dumpsWritten = 0;
+
+  /**
+   * Read-only counter of full-dataset dumps (one per completed flush attempt,
+   * after coalescing) since this adapter started. Numbers only; used by the
+   * soak metrics to estimate dumps per turn. It is never reset.
+   */
+  get dumpCount(): number {
+    return this.dumpsWritten;
+  }
+
+  private async flushNow(): Promise<void> {
     try {
+      this.dumpsWritten++;
       const nquads = this.store.dump({ format: OxigraphAdapter.NQUADS_MIME });
       // Atomic write: write to a temp file then rename
       const tmp = `${this.dataFile}.tmp`;

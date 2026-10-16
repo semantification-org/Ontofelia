@@ -127,6 +127,121 @@ SELECT ?cons ?label WHERE {
 This is the operational meaning of "self-aware": the agent's persona is not
 a string, it's a graph it can interrogate.
 
+### 2.3 As built: derived capabilities and constraints
+
+Behind `cog.flagSelfModelQuery` (default off) the capability and constraint
+records are **derived**, not written by hand. Seeding runs at boot and at
+`/reseed-persona`, and when the flag is switched on with `/cog flag`; with the
+flag off nothing is derived and the prompt does not change. Sources:
+
+| Source | Becomes |
+|---|---|
+| tool registry (`ToolRegistry.list()`) | one `cogt:Capability` per tool: `cogt:requires "<tool>"`, `cogt:policyStatus`, `cogt:relevantToGoalType` by tool category |
+| tool policy (`ToolPolicyEngine.describeTool`) | `cogt:policyStatus` `allowed` / `needs-approval` / `denied`; one `cogt:Constraint` (`derivedFrom "tool-policy"`) applying to every tool that is not freely usable |
+| guardian policy (`GuardianPolicy.guardedTools()`) | a guarded tool the policy allows is `needs-approval`; one `cogt:Constraint` (`derivedFrom "guardian-policy"`) applying to the guarded tools |
+| `onto:BehaviorDirective` individuals | one `cogt:Constraint` per **binding** directive of scope `safety`, `cogt:basedOn` the directive. Other directives are style rules the system prompt already carries |
+
+Two vocabularies share the self graph and stay disjoint. The bootstrap persona
+(subject `urn:ontofelia:core#Ontofelia`, `onto:` predicates) belongs to
+`KnowledgeEngine.reseedSelf`; the self-model (subject `urn:<agent>:self#<agent>`,
+`cogt:` predicates) belongs to `SelfModel`. The derivation reads the
+directives and never writes the bootstrap subject. Everything it writes is on
+the self-model subject or on a node under `urn:<agent>:self#derived/`:
+
+```turtle
+<urn:ontofelia:self#ontofelia>
+    cogt:hasDerivedProfile <urn:ontofelia:self#derived/profile> ;
+    cogt:hasCapability     <urn:ontofelia:self#derived/cap/exec> ;
+    cogt:hasConstraint     <urn:ontofelia:self#derived/cons/guardian> .
+
+<urn:ontofelia:self#derived/profile> a cogt:DerivedSelfProfile ;
+    cogt:autonomyLevel  "semi-autonomous" ;       # restricted | semi-autonomous | autonomous
+    cogt:ownerRelation  "approves-gated-tools" ;  # or "no-approval-required"
+    cogt:owner          <urn:ontofelia:self#derived/owner> ;
+    cogt:requiresApproval <urn:tool:exec>, <urn:tool:fs_write> ;
+    cogt:authorityOver    <urn:tool:memory_ask> .
+
+<urn:ontofelia:self#derived/cap/exec> a cogt:Capability ;
+    cogt:requires "exec" ; cogt:policyStatus "needs-approval" ;
+    cogt:derivedFrom "tool-registry" ;
+    cogt:relevantToGoalType cogt:ExecuteCommand, cogt:HandleRequest, cogt:OwnerRequestedWork .
+```
+
+Deviation from the sketch in 2.1, on purpose: `requiresApproval`,
+`authorityOver`, the autonomy level and the owner relation hang on the
+**derived profile node**, not on the self-model subject, so a re-derivation can
+replace exactly its own triples and a learned triple with the same predicate on
+the subject is never deleted. Derived nodes carry no `rdfs:label` or
+`rdfs:comment` (they would take part in entity resolution by label); their name
+is `cogt:derivedLabel`. The legacy persona rendering skips them.
+
+Re-derivation is one SPARQL update: the previous derived triples go and the
+new ones come in. The same sources give the identical triple set, a removed
+tool loses its capability and its approval entry, and hand-seeded or learned
+self-model facts stay.
+
+**Which tools need approval**, one query over the self graph (this is the
+query the test runs, `SelfModel.toolsNeedingApprovalQuery()`):
+
+```sparql
+PREFIX cogt: <urn:shared:ontology#cog/>
+SELECT DISTINCT ?tool WHERE {
+  GRAPH <urn:ontofelia:self> {
+    <urn:ontofelia:self#ontofelia> cogt:hasDerivedProfile ?profile .
+    ?profile cogt:requiresApproval ?tool .
+  }
+} ORDER BY ?tool
+```
+
+`?tool` is `urn:tool:<percent-encoded name>`. The test compares the result with
+the guardian's `guardedTools()` plus every tool for which
+`ToolPolicyEngine.isAllowed` answers `requiresApproval`.
+
+**`queryFor(goalType)` mapping** (conservative). Learned capabilities keep the
+old rule: scoped to their `relevantToGoalType`, or general when unscoped.
+Derived tool capabilities are never unscoped and never scoped to
+`RespondToUser`, so a plain chat turn is shown the constraints only:
+
+| Tool category | Goal types |
+|---|---|
+| `filesystem`, `shell` | `ExecuteCommand`, `HandleRequest`, `OwnerRequestedWork` |
+| `web` | `AnswerQuestion`, `HandleRequest` |
+| `memory`, `ontology` | `AnswerQuestion`, `AnswerInTopic`, `HandleRequest` |
+| anything else (`media`, `channel`, `utility`, a new category) | `HandleRequest` |
+
+Constraints are not goal-scoped and are always returned, so on a fresh install
+`queryFor` returns rows for every goal type as soon as the derivation has run.
+
+**When it is derived.** At start, when the self-model flag is switched on, on
+`/reseed-persona`, after the gateway's `POST /api/ontology/reseed-self` (which the
+CLI command `reseed-self` calls; the response then carries `selfModel` with the
+counts, or `selfModelError`), and before a cycle when the tools or their
+verdicts changed since the last derivation (a plugin, a tool the gateway
+registers once the runtime is up, a removed tool): the registry is compared by a
+fingerprint of name, category, verdict and description, and a change derives
+again, once, before that turn. Always only with the self-model flag on. Without a
+goal type (goal stack off) `queryFor` returns the capabilities that are
+generally relevant and every constraint.
+
+**What the prompt says.** Every `[Self]` line is a fixed template; store text
+fills one slot and goes through `neutraliseQuoted` (built on `neutraliseLine`)
+first. A row that does not fit its template is left out.
+
+- `has tool <name> (policy: allowed | needs approval | denied by default)` —
+  a statement about what the policy lets the agent attempt, not about skill.
+  The status is read for the owner on a trusted channel; a non-owner on a chat
+  channel may be refused more than the line says. At most eight tool lines are
+  rendered, tools that are not freely usable first.
+- `Some tools are denied or need the owner's approval (tool policy)`
+- `Risky shell and scheduling commands need the owner's approval (guardian)`
+- `Binding rule (<scope>): <directive label>`
+
+**Constraint pressure** counts the tool calls the system refused, read from the
+typed denial class the tool executor puts on a failed result:
+`policy-denied` (tool policy, self-protection, unattended gate, missing
+sandbox), `guardian-approval-required` (an owner approval that was not granted)
+or `error` (anything else, which never counts, whatever its text says).
+
 ---
 
 ## 3. Metacognition — what it monitors
@@ -259,6 +374,21 @@ background pass over `urn:<agent>:cog:meta` looks for:
 These produce **long-term goals** in `urn:<agent>:cog:goals:longterm` that
 appear in the user's next session.
 
+As implemented, the scan runs **per user**: every read is restricted to one
+`cogt:forUser` (the owner's scope also holds records written before the key
+existed), is bounded (newest 5000 rows) and compares instants, not strings. Every
+record the scan writes carries the user. Nothing is aggregated across users; the
+report returned to the owner covers the owner's scope only. The former
+`ReflectionRunner` body (worldview triple count, conflict detection, reflection
+event) lives in `reflectOnWorldview`; `ReflectionRunner.reflect` delegates to it,
+and `crossCycleScan` runs it for the owner scope when given a conflict detector.
+The runtime hands the weekly scan (`/cog scan`, the `cog.metacog-scan` job) the
+same detector the gateway's reflection endpoint uses (`setConflictDetector`), so
+the scheduled scan also runs the worldview reflection once, for the owner scope,
+and no other user's scan does. Without a detector the scan skips it. The gateway
+endpoint `POST /api/reasoning/reflect` is unchanged: it still calls
+`ReflectionRunner.reflect`, which delegates to the same function.
+
 ---
 
 ## 7. The "I don't know" rule
@@ -280,6 +410,49 @@ cog:wm_meta_001 a cogt:WorkingMemoryEntry ;
 
 The high salience (1.0) means it always enters the prompt, where it
 nudges the LLM toward honest uncertainty rather than confabulation.
+
+### 7.1 As implemented
+
+- **Trigger.** The intent is `question` and Phase 2 finished cleanly (`status ok`)
+  with no entry. A degraded read (`partial`, `timeout`) never triggers: a failed
+  lookup is not an unknown.
+- **Entry.** `metaBuffer`, kind `unknown-nudge`, salience 1.0, `carryForward
+  false`, written for the sender by the queued persist. The prompt assembler
+  renders it in `[Note]` as one fixed, neutral sentence (answer that you do not
+  know rather than guess, or ask what is missing).
+- **Owner-only canary.** In live prompt mode the nudge reaches the prompt of the
+  owner only. The setup key `cog.unknownNudgeAllUsers` (boolean on the cognitive
+  config subject, default false) lets it reach every user. The entry is written
+  for every user either way. In shadow mode it is only recorded, for every user.
+- **Flags.** Everything needs `flagMetacognition`; the prompt effect needs
+  `flagWorkingMemoryPrompt` as well. With metacognition off nothing is written
+  and the prompt is byte-identical.
+
+### 7.2 Signals in the reflective marker (as implemented)
+
+| Signal | Value |
+|---|---|
+| `forUser` | the user key of the cycle (also on impasses raised by the cycle) |
+| `newKnowledge` | the number of facts the ingestion report stored for the message, as a string |
+| `goalDrift` | the top goal differs from the previous turn's top goal (same session and user) and the turn did not cause it: neither the message's intent, nor its entities, nor a closing cue. Only with the goal stack on. The previous top goal is held in memory, so the first turn after a restart reports no drift |
+| `goalProgress` | `N step update(s), M goal(s) resolved` for the cycle; absent when there are none |
+| `uncertainty` | `gap` = empty retrieval AND question intent; `errors` = tool calls that ended in an error. `high` if (gap and errors >= 1) or errors >= 3; `medium` if gap or errors >= 1; else `low` |
+| `conflictSurfaced` | the number of facts of the sender's own graph that were replaced during this turn |
+
+A conflict of the turn pushes a `ResolveConflict` goal (priority 0.5, for the
+sender, at most three per turn, never twice for the same fact) when the goal
+stack is on. Worldview facts and changes made before the turn do not count.
+
+The **churn warning** is a `metaBuffer` entry (kind `churn-warning`, salience
+0.8, `carryForward false`) recorded when the 5th tool call of a turn starts,
+once per turn, and written by the queued persist. The 5th call is counted in
+the per-cycle tool sink, which the blocking and the streamed core both report
+through, so a streamed turn gets the warning too, exactly once.
+
+The **daily impasse cap** (the count after which a kind of impasse becomes a
+`cogt:ChronicImpasse`) is counted per user: one user's impasses never exhaust
+another's. The owner's scope also counts records written before the user key
+existed.
 
 ---
 

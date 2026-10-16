@@ -2,6 +2,21 @@
 
 > **Status:** Draft for review · **Author:** Architecture Working Group · **Last update:** 2026-05-31
 >
+> **Implementation status (2026-10-15):** the specification is a draft; its
+> modules are implemented in part, each part behind a feature flag. **On by
+> default for new installs since the staged default-on rollout (2026-10-15);
+> existing installs keep their flags and opt in with `/cog defaults apply`;
+> retention stays off** (so does the initiative flag, the one flag whose feature
+> makes model calls of its own). Implemented behind
+> flags: the cycle with its six phase records, working memory (with carry-over
+> and attention), episodic memory with recall and a consolidation job, the goal
+> stack, procedural memory, metacognition with its impasse episodes, the
+> queryable self-model, the prompt assembler (shadow and live), the retention
+> sweep, the initiative service, and a read-only inspector with an "explain this
+> response" chain. The flag list with defaults, the rollout, the rollback and
+> the migration note are doc 09 §7; where the code names differ from this text,
+> doc 09 §12 records the decision.
+>
 > This is the specification of Ontofelia's cognitive architecture. It extends the
 > existing Named-Graph topology (see [`../knowledge-graph-concept.md`](../knowledge-graph-concept.md))
 > with explicit cognitive modules — working memory, episodic memory, procedural

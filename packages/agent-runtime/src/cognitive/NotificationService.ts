@@ -2,9 +2,7 @@
  * NotificationService — the governed owner-notification layer
  * (docs/initiative-architecture.md §7).
  *
- * It is the concrete {@link NotificationSink} that drops into
- * {@link InitiativeService} (replacing the no-op {@link LoggingNotificationSink})
- * and it also backs the `notify_owner` tool. All delivery policy lives HERE, not
+ * It is the concrete {@link NotificationSink} and backs the `notify_owner` tool. All delivery policy lives HERE, not
  * in the LLM: every notify is evaluated against the daily cap and quiet hours
  * BEFORE any send, suppressed items are queued as a pending digest, and every
  * notification — sent or suppressed — is written as an episode for the audit
@@ -21,7 +19,7 @@
  * logic with a fake clock and a capturing fake channel over an in-memory store.
  */
 
-import { createLogger, type TriplestoreAdapter } from '@ontofelia/core';
+import { OWNER_USER_KEY, createLogger, type TriplestoreAdapter } from '@ontofelia/core';
 import {
   EpisodicMemory,
   GraphUriResolver,
@@ -119,8 +117,7 @@ export interface NotificationServiceOptions {
 const PRIORITY_ORDER: Record<NotifyPriority, number> = { low: 0, normal: 1, high: 2 };
 
 /**
- * Concrete owner-notification sink. Implements {@link NotificationSink} (so it
- * drops straight into InitiativeService) and additionally exposes {@link deliver}
+ * Concrete owner-notification sink. Implements {@link NotificationSink} and additionally exposes {@link deliver}
  * (rich result) for the notify_owner tool and {@link drainDigest} for the
  * "while you were away" digest on next owner contact.
  */
@@ -155,7 +152,7 @@ export class NotificationService implements NotificationSink {
   }
 
   /**
-   * {@link NotificationSink} entry point used by initiative cycles. Fire-and-forget
+   * {@link NotificationSink} entry point. Fire-and-forget
    * from the caller's view — the delivery decision and its audit are the service's
    * responsibility. Never throws (delivery failures are recorded and swallowed).
    */
@@ -407,6 +404,7 @@ export class NotificationService implements NotificationSink {
         episodeType: 'notification',
         occurredAt: now,
         actor: `urn:${this.agentId}:self#${this.agentId}`,
+        forUser: OWNER_USER_KEY,
         payload: JSON.stringify({ priority, reason, ...(goalId ? { goalId } : {}) }),
         outcome: 'success',
         ...(goalId ? { partOfGoal: goalId } : {}),

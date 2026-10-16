@@ -92,11 +92,14 @@ export function registerOntologyCommand(program: Command) {
         const r = await res.json() as {
           bootstrapBefore: number; bootstrapAfter: number; preserved: number;
           totalBefore: number; totalAfter: number;
+          selfModel?: { capabilities: number; constraints: number }; selfModelError?: string;
         };
         console.log(chalk.green('✔ Self graph re-seeded from bootstrap/self.ttl'));
         console.log(`  Bootstrap persona triples: ${r.bootstrapBefore} → ${r.bootstrapAfter}`);
         console.log(`  Learned / other triples preserved: ${chalk.cyan(r.preserved)}`);
         console.log(`  Self graph total: ${r.totalBefore} → ${r.totalAfter}`);
+        if (r.selfModel) console.log(`  Self-model re-derived: ${r.selfModel.capabilities} tools, ${r.selfModel.constraints} constraints`);
+        if (r.selfModelError) console.log(chalk.yellow(`  Self-model re-derivation failed: ${r.selfModelError}`));
       } catch (err: unknown) {
         console.error(chalk.red(`Failed to reseed self graph: ${(err as Error).message}`));
       }

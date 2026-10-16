@@ -36,6 +36,7 @@ async function seedOwnerMandate(store: TriplestoreAdapter): Promise<string> {
   return em.append({
     episodeType: 'message-received',
     actor: OWNER_ACTOR,
+    actorIsOwner: true,
     payload: 'keep working on the report and remind me when done',
     occurredAt: new Date('2026-05-01T00:00:00.000Z'),
   });

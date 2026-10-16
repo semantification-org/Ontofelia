@@ -338,4 +338,59 @@ Next time the agent picks up `cogt:WriteConceptDoc`, goal management
 surfaces this SequenceSkill into the prompt, and the LLM tends to follow
 it — closing the loop.
 
+## 11. Completion rules (procedural flag on)
+
+Everything here applies only with the procedural-memory flag on; with it off
+there are no new reads or writes and the prompt is unchanged.
+
+- **Suggestion filter.** A skill is suggested only with `successRate >= 0.7`
+  over at least 3 recorded calls (the same floor sequence skills need). A
+  learned sequence needs `successRate >= 0.7`. The `[Skills that worked ...]`
+  block text itself is unchanged.
+- **Adherence.** When the prompt of a turn showed suggestions, every traced
+  call of the turn gets `cogt:proceduralAdherence` (true when its tool is one of
+  the tools named by the shown suggestions) and the cycle gets one
+  `cogt:AdherenceSummary` (`suggestedTools`, `tracedCalls`, `adheredCalls`,
+  `adherenceRate`, `forUser`). With no suggestion shown neither is written.
+- **Cumulative p95.** `cogt:p95DurationMs` is the exact nearest-rank p95 of a
+  bounded window: the latest 200 measured durations of the skill (kept as
+  `cogt:durationWindow`). Calls without a measured duration are left out.
+- **Follow-up satisfaction.** The next message of the same user in the same
+  session (and within 6 hours of the turn) is classified satisfied / dissatisfied
+  / ambiguous; ambiguity writes nothing. Only that user's own, not yet judged
+  traces of the previous cycle are updated, once, with `cogt:satisfactionWeight
+  0.3`. The skill keeps `satisfiedWeight` and `dissatisfiedWeight`;
+  `satisfactionRate = max(0, satisfiedWeight - dissatisfiedWeight) /
+  successCount`. A signal without a weight counts as before (1 / 0).
+  The classifier matches whole words (Unicode-aware, German and English),
+  applies negation inside one clause ("not good", "nicht gut", "funktioniert
+  nicht" are dissatisfied; "not bad", "nicht schlecht" are satisfied), and
+  returns ambiguous for questions, contrast ("but", "aber") and long messages.
+- **Argument redaction.** A trace stores argument keys only. Every argument the
+  rules mask is stored as `cogt:maskedArg "<path>=hmac-sha256:<hex>"`: the
+  HMAC-SHA256 of the value under a key that only this instance holds, so equality
+  can be checked without keeping the value and a weak value (a short PIN) cannot
+  be guessed from the stored text without the key. The key is 32 random bytes,
+  generated once, in the file `arg-digest.key` of the agent's state directory
+  (the parent of its sessions directory), mode 0600, created atomically (written
+  to a private temporary file and linked to its name, so a concurrent creator
+  never leaves a half-written key). It is never logged, printed, stored in the
+  triplestore or passed in a command line. Without a key (no state directory, or
+  the file cannot be read or created) no digest is stored, only the path of the
+  masked argument. Values written before this change keep the form
+  `<path>=sha256:<hex>`; the prefix names the scheme, two digests compare only
+  within one scheme, and there is no migration. Built-in rules: keys matching
+  `token|secret|passw|key|auth|cookie|credential` (at any depth), values that
+  match a known credential shape, hex runs of 32+ characters, base64-like runs of
+  40+, and `Bearer`/`Basic` credentials. The setup graph may add rules with one
+  JSON literal `cog:argRedactionRules` on the cognitive config subject:
+  `{"keyPatterns": ["^pin$"], "valuePatterns": ["^[0-9]{16}$"]}`. Configured
+  rules only add to the built-ins.
+- **Retention.** Traces and adherence summaries older than 90 days are deleted
+  by the daily `/cog cleanup` job (the existing cron). Skill and sequence-skill
+  aggregates stay; only their ring-buffer link to a deleted trace goes.
+- **Ownership.** Traces and adherence summaries carry `cogt:forUser`. The skill
+  aggregates remain agent-wide by design (content-free: tool names, counts,
+  timings), so suggestions are drawn from them for every user.
+
 Continue with [`07-goals-and-attention.md`](07-goals-and-attention.md).

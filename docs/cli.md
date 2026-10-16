@@ -314,7 +314,9 @@ These commands are available inside any chat session (Web UI, Telegram):
 | `/skills` | List installed skills |
 | `/skill <name> [input]` | Execute a skill |
 | `/plugins` | List installed plugins |
-| `/cog [health\|retain\|consolidate\|scan\|migrate\|debug on\|debug off\|cycles\|explain <cycleId>]` | Cognitive-architecture maintenance and inspection |
+| `/cog [health\|retain\|consolidate\|scan\|migrate\|debug on\|debug off\|cycle on\|cycle off\|cycles\|explain <cycleId>]` | Cognitive-architecture maintenance and inspection. `cycle on\|off` switches the cycle manager (needed by `arm_goal`); owner-only, live owner turn |
+| `/goals` | List the agent's goals (owner-only) |
+| `/initiative [on\|off\|help]` | Self-initiated cycles: report, or switch on/off (owner-only) |
 | `/stop` | Stop the agent |
 | `/help` | Show available commands |
 

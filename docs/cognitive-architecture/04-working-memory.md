@@ -88,6 +88,14 @@ cog:wm_<n> a cogt:WorkingMemoryEntry ;
 | `goal-parent` | goalBuffer | An ancestor goal still relevant |
 | `action-proposal` | actionBuffer | LLM's proposed next action |
 | `action-result` | actionBuffer | Tool result after execution |
+
+Implemented for tool calls (see doc 09 §12 for the differences from this
+schema): `action-proposal` carries `toolName`, `callId`, `toolArgs` (argument
+keys only, masked paths listed, never a value) and `forGoal` (the active goal,
+when the goal stack is on); `action-result` carries `callId`, `outcome`
+(`success` or `error`), `denialClass` and `durationMs`. Both are written by the
+queued persist with the sender's `forUser`, below the default threshold, so they
+are an audit trail and never prompt material.
 | `capability` | selfBuffer | A `cogt:Capability` relevant this cycle |
 | `constraint` | selfBuffer | A `cogt:Constraint` relevant this cycle |
 | `persona-fragment` | selfBuffer | Identity/style note for prompt |
@@ -326,5 +334,69 @@ for the Web UI.
       reasons — keeping the global workspace focused — not for cost. The render
       emits the full salience-≥θ slice; if a model's hard context limit is ever
       hit, the model-side limit truncates safely, and that is acceptable.
+      *Amended for the recall blocks:* once recalled text can reach the prompt
+      (`flagWorkingMemoryPrompt` with `flagEpisodicRecall`), the entry-count
+      caps alone let the cost grow with the user's history. The prompt
+      assembler (`cognitive/PromptAssembler.ts`) therefore adds a conservative
+      token ceiling for the cognitive blocks only; the rest of the prompt is
+      untouched. Tokens are estimated as characters / 4. The `[Recalled]` block
+      has a hard cap (default 600), all cognitive blocks together another
+      (default 1200); entries are cut whole, lowest score first (recalled) or
+      least important block first (total). Both are read per message from the
+      setup graph.
+
+### 10.1 Prompt assembler parameters (setup graph)
+
+Numeric triples on `urn:<agent>:setup:cognitive` in `urn:<agent>:setup`
+(predicates in the `cogt:` namespace `urn:shared:ontology#cog/`); a missing,
+unparseable or out-of-range value falls back to the default.
+
+| Predicate | Meaning | Default |
+|---|---|---|
+| `salienceThreshold` | θ, the global-workspace cutoff, 0 to 1 | 0.5 |
+| `recalledTokenCap` | hard cap of the `[Recalled]` block, estimated tokens | 600 |
+| `promptTokenCap` | cap of all cognitive blocks together | 1200 |
+
+Two flags choose the mode per message (both default off): `flagPromptShadow`
+runs the assembler beside the normal prompt and records its output and a block
+diff in the cycle graph (`cogt:PromptShadow`); `flagWorkingMemoryPrompt` builds
+the cognitive blocks from the assembler instead of the legacy strings. Live wins
+when both are on. The always-on graph context of the prompt is not replaced.
+
+## 11. Implementation notes: carry-over and attention (cycle manager on)
+
+Done by the queued persist of the next cycle, never on the reply path:
+
+- **Carry.** The previous cycle of the same session and the same user is carried
+  into the current one: `selfBuffer` entries, `goalBuffer` entries of goals that
+  are still live (the implicit respond-to-user goal excluded), and entries with
+  `carryForward = true` (flagged notes). Salience x 0.7, `carriedFrom` to the
+  source entry. An entry the current cycle already holds in the same form
+  (buffer, kind, payload, goal) is not copied again. Nothing carries across
+  users or sessions; the link is held in memory, so the first cycle after a
+  restart has nothing to carry.
+- **Close.** The previous graph gets a `cogt:closedAt` timestamp and is kept; the
+  age-based sweep (7 days) removes it as before.
+- **Attention.** Entries that `refersTo` an entity of the active goal get +0.2
+  (cap 1.0). A carried entry about an entity of no live goal that no fresh entry
+  of the cycle refreshes is damped x 0.7 (on top of the carry decay). A carried
+  entry below the floor `min(0.1, θ)` is deleted.
+- **Overflow.** When the capacity forces out an entry above salience 0.7, one
+  `wm-overflow` impasse is raised for the cycle (metacognition on), carrying
+  `cogt:forUser`.
+- **Carried entries in the live prompt.** With `flagWorkingMemoryPrompt` on, the
+  prompt of a turn also contains what the carry will bring in. The assembler
+  reads the previous cycle's graph of the same session and user (read-only, at
+  most 20 rows, highest salience first), keeps entries written for exactly this
+  sender with `carryForward = true` that are not expired, takes the carry decay
+  (salience x 0.7), and keeps those still at or above θ. Self and goal entries
+  are not read: they are rebuilt every turn. The text is neutralised like any
+  quoted text, and the assembler's own caps apply (three notes, the recalled
+  cap, the total cap). Notes appear as `- Previously noted: <text>` in `[Note]`;
+  retrieval entries join `[Recalled]` when recall is on. The link to the
+  previous cycle is held in memory, so the first turn after a restart has
+  nothing to read. With the flag off nothing is read.
+- **Setup keys.** `salienceThreshold` (θ, default 0.5) and
+  `workingMemoryCapacity` (integer 1 to 10000, default 200).
 
 Continue with [`05-episodic-memory.md`](05-episodic-memory.md).

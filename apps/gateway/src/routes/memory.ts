@@ -215,7 +215,23 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
         `Self graph re-seeded from bootstrap/self.ttl: bootstrap ${report.bootstrapBefore} → ${report.bootstrapAfter}, ` +
         `${report.preserved} learned/other triple(s) preserved`,
       );
-      return report;
+      // After the persona, never before: the derived self-model reads the behavior
+      // directives the reseed just wrote. Only with the self-model flag on (the
+      // runtime does nothing with it off); the response gains a field only when
+      // something was derived or the derivation failed.
+      let selfModel: { capabilities: number; constraints: number } | undefined;
+      let selfModelError: string | undefined;
+      try {
+        selfModel = await agents.get(PRIMARY_AGENT_ID)?.seedDerivedSelfModelIfEnabled();
+      } catch (e) {
+        selfModelError = (e as Error).message;
+        logger.warn('Self-model re-derivation after reseed failed: ' + selfModelError);
+      }
+      return {
+        ...report,
+        ...(selfModel ? { selfModel } : {}),
+        ...(selfModelError !== undefined ? { selfModelError } : {}),
+      };
     } catch (e) {
       logger.error('Failed to reseed self graph: ' + (e as Error).message);
       return reply.code(500).send({ error: (e as Error).message });

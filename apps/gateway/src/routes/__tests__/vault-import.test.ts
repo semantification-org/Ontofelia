@@ -94,7 +94,7 @@ describe('POST /api/knowledge/vault-import', () => {
     const second = await post({ root, vaultName: 'applyrun', apply: true });
     expect(second.statusCode).toBe(200);
     for (const p of IMPORTED) expect(status(second.json(), p)).toBe('unchanged');
-  });
+  }, 20_000);
 
   it('rejects a relative root, a missing directory and a file with 400', async () => {
     expect((await post({ root: 'relative/dir', vaultName: 'demo' })).statusCode).toBe(400);

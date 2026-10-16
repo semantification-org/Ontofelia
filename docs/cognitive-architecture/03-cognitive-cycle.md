@@ -159,6 +159,41 @@ score = recency_decay(occurredAt) * entity_overlap(entry, query) * specificity(g
 
 with `specificity(user) > specificity(worldview) > specificity(shared:world)`.
 
+**As implemented** (`Comprehension.ts`; read-only, before the LLM call, after
+perception, only with the cycle flag on):
+
+- Episodes are read with the sender's own user key as mandatory scope (the
+  owner's key for the owner, never the all-users scope): entity-anchored
+  (`cogt:about` a perceived entity IRI, across sessions), goal-anchored
+  (`cogt:partOfGoal` the sender's active goal, goal stack on; the implicit
+  RespondToUser goal anchors nothing) and session-temporal (the newest five of
+  this session). Per entity and goal the newest 30 of the sender are candidates.
+  Tool episodes, payload-less (warm) episodes and credential-shaped payloads are
+  not recalled; the turn's own inbound episode never is.
+- Episode score is the doc 05 §5.4 formula, each component in [0, 1]: entity =
+  share of the perceived entity IRIs the episode is about, goal = 1 if part of
+  the active goal, recency = exp(-hours/168), tag = share of the perceived tags
+  (the intent label) the episode carries.
+- One-hop facts of each perceived entity come from the sender's own graph and the
+  worldview only (`KnowledgeEngine.getEntityFacts`). A fact is scored
+  `0.4 + 0.3 * specificity` with user 1.0, worldview 0.6, shared world 0.3 (the
+  shared world graph is not read: nothing writes it). An `out` fact whose value
+  was replaced by belief revision in a graph the sender may read carries a
+  `changed` note with the previous value (conflicts graph joined to the claims
+  graph).
+- The best eight entries (episodes and facts together) are kept, each with its
+  `forUser`. They are written to the retrieval buffer by the queued persist, off
+  the reply path; the in-memory result is handed to later phases. No entry means
+  nothing is written and the reflective marker's `emptyRetrieval` is true.
+- Entities perception left pending are resolved here with the sender-scoped,
+  read-only lookup if there are at most three and the lookup finishes within
+  150 ms; otherwise they are skipped for recall and resolved in the persist as
+  before. The phase targets 500 ms (p95, 10 000 episodes) and ends hard at
+  1.5 s, after which the answer goes ahead without recall.
+- `cog.flagEpisodicRecall` (default off) only marks that a later step may inject
+  the recalled entries into the prompt. The recall itself follows the cycle flag;
+  the prompt is unchanged by this phase.
+
 **Example retrieval-buffer entry:**
 
 ```turtle
@@ -272,6 +307,14 @@ The exact projection rules:
 | `metaBuffer` | Render any carry-over note as italic "previously noted: …" | 3 |
 
 ### 5.2 Action-buffer schema
+
+> **Implemented (behind `flagCycleManager`):** one `action-proposal` and, once
+> the call finished, one `action-result` per **tool call** (a plain text reply
+> is not written as a proposal). Neither entry holds an argument value: the
+> proposal carries the tool name, the argument keys and the paths of the
+> arguments the redaction rules masked; the result carries `ok`/`error`, the
+> denial class and the duration. Differences from the schema below are listed
+> in doc 09 §12.
 
 ```turtle
 cog:wm_action_001 a cogt:WorkingMemoryEntry ;
@@ -417,13 +460,18 @@ architecture becomes the bottleneck instead of the LLM.
 
 ## 10. SPARQL: walk the cycle
 
-A complete behavioural trace of one cycle, queryable:
+A complete behavioural trace of one cycle, queryable. The identifiers are
+examples in the shape the runtime writes (`urn:<agent>:cog:cycle:cyc-<id>`).
+Both queries run against the data of a cycle written with the current phase
+predicates; a cycle stored before that (see §1 and doc 09 §12) has `ordinal`
+instead of `phaseIndex` and no `phaseStatus`, so the first query returns no
+rows for it (the inspector reads both shapes).
 
 ```sparql
 PREFIX cogt: <urn:shared:ontology#cog/>
 SELECT ?phase ?idx ?started ?ended ?status WHERE {
   GRAPH <urn:ontofelia:cog:cycles:sess_2026-05-31_18-04> {
-    cog:cycle_2026-05-31T18-04-32Z_001 cogt:hasPhase ?phase .
+    <urn:ontofelia:cog:cycle:cyc-0001> cogt:hasPhase ?phase .
     ?phase cogt:phaseIndex ?idx ;
            cogt:startedAt  ?started ;
            cogt:endedAt    ?ended  ;
@@ -439,19 +487,33 @@ it, back to the WM entry, back to the episode, back to the message:
 PREFIX cogt: <urn:shared:ontology#cog/>
 SELECT ?goal ?phase ?action ?episode ?messageText WHERE {
   GRAPH <urn:ontofelia:cog:goals:sess_2026-05-31_18-04> {
-    ?goal a cogt:Goal ; cogt:status "resolved" .
+    ?goal a cogt:Goal ; cogt:goalStatus "resolved" .
   }
-  GRAPH <urn:ontofelia:cog:working:sess_2026-05-31_18-04:cycle_2026-05-31T18-04-32Z_001> {
-    ?actionEntry cogt:writtenTo cogt:actionBuffer ;
+  GRAPH <urn:ontofelia:cog:working:sess_2026-05-31_18-04:cyc-0001> {
+    ?actionEntry cogt:writtenTo "actionBuffer" ;
                  cogt:forGoal   ?goal ;
                  cogt:writtenBy ?phase ;
                  cogt:payload   ?action .
   }
+  GRAPH <urn:ontofelia:cog:cycles:sess_2026-05-31_18-04> {
+    ?cycle cogt:hasPhase ?phase ;
+           cogt:cycleId  ?cycleId .
+  }
   GRAPH <urn:ontofelia:cog:episodic> {
-    ?episode cogt:triggers ?phase ;       # inverse of cogt:triggeredBy
-             cogt:rawText  ?messageText .
+    ?episode cogt:cycleId ?cycleId ;
+             cogt:episodeType "message-received" ;
+             cogt:payload  ?messageText .
   }
 }
 ```
+
+What was corrected against the first draft of these queries (the draft did not
+run against the stored data): the cycle and graph identifiers are written out
+as IRIs (the draft used a `cog:` prefix it never declared); the goal status
+predicate is `cogt:goalStatus`; the buffer is the plain literal `"actionBuffer"`
+(not an IRI); the episode joins the cycle through `cogt:cycleId` (the draft's
+`cogt:triggers` does not exist) and its text is `cogt:payload` (not
+`cogt:rawText`). The cycle resource carries `cogt:cycleId` for that join. Each
+correction is listed as a decision in doc 09 §12.
 
 Continue with [`04-working-memory.md`](04-working-memory.md).

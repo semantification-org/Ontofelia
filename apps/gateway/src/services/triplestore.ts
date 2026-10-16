@@ -4,10 +4,11 @@ import * as os from 'os';
 import type { OntofeliaConfig } from '@ontofelia/config';
 import type { Logger } from 'pino';
 import { PRIMARY_AGENT_ID } from '@ontofelia/core';
+import { seedDefaultsForFreshInstall } from '@ontofelia/agent-runtime';
 import {
   FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter,
   OntologyManager, ConflictDetector, ReflectionRunner, KnowledgeEngine,
-  FusekiWatchdog, GraphRegistry
+  FusekiWatchdog, GraphRegistry, GraphUriResolver
 } from '@ontofelia/semantic-memory';
 
 export async function initTriplestore(config: OntofeliaConfig, currentDir: string, logger: Logger) {
@@ -77,6 +78,19 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
     const { seeded } = await knowledgeEngine.seedCoreGraphs(bootstrapDir, PRIMARY_AGENT_ID);
     if (seeded.length > 0) {
       logger.info(`Core graphs seeded: ${seeded.join(', ')}`);
+    }
+    // Cognitive layer: on by default for a NEW install only. "New" means the
+    // self graph was seeded in this very boot and the store holds nothing else
+    // of this agent; an existing install is never touched (it adopts the
+    // defaults with the owner command `/cog defaults apply`).
+    try {
+      const fresh = seeded.includes(GraphUriResolver.getSelfGraph(PRIMARY_AGENT_ID));
+      const r = await seedDefaultsForFreshInstall(triplestore, PRIMARY_AGENT_ID, fresh);
+      if (r.seeded) {
+        logger.info(`Cognitive layer defaults written for a new install (${r.flags.length} flags on; retention and initiative stay off)`);
+      }
+    } catch (e) {
+      logger.warn('Could not write the cognitive layer defaults: ' + (e as Error).message);
     }
   } catch (e) {
     logger.warn('Could not seed core graphs: ' + (e as Error).message);

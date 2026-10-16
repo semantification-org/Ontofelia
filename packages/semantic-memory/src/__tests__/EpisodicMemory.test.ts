@@ -45,7 +45,7 @@ describe('EpisodicMemory', () => {
       payload: 'kennst du ontofelia',
       transcriptRef: 'sess.jsonl:offset_42',
     });
-    const [hit] = await em.findInSession(SESS);
+    const [hit] = await em.findInSession(SESS, 'all');
     expect(hit.uri).toBe(uri);
     expect(hit.episodeType).toBe('message-received');
     expect(hit.actor).toBe('urn:entity:Alice');
@@ -56,12 +56,33 @@ describe('EpisodicMemory', () => {
     expect(hit.precededBy).toBeUndefined(); // first in session
   });
 
+  it('stores hasClaim links for the claims of the episode', async () => {
+    const uri = await em.append({
+      episodeType: 'message-received',
+      sessionId: SESS,
+      hasClaim: ['urn:claim:a', 'urn:claim:b'],
+    });
+    const res = await store.query(
+      `SELECT ?c WHERE { GRAPH <${em.graphUri()}> { <${uri}> <urn:shared:ontology#cog/hasClaim> ?c } }`,
+    );
+    expect((res.bindings ?? []).map((b) => b.c.value).sort()).toEqual(['urn:claim:a', 'urn:claim:b']);
+  });
+
+  it('addAbout appends links without touching the rest of the episode', async () => {
+    const uri = await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'x', about: ['urn:e:1'] });
+    await em.addAbout(uri, ['urn:e:1', 'urn:e:2']);
+    await em.addAbout(uri, []);
+    const [hit] = await em.findInSession(SESS, 'all');
+    expect([...hit.about].sort()).toEqual(['urn:e:1', 'urn:e:2']);
+    expect(hit.payload).toBe('x');
+  });
+
   it('chains precededBy to the previous episode of the session', async () => {
     const e1 = await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'one' });
     const e2 = await em.append({ episodeType: 'response-sent', sessionId: SESS, payload: 'two' });
     const e3 = await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'three' });
 
-    const chain = await em.chainFrom(e3);
+    const chain = await em.chainFrom(e3, 'all');
     expect(chain.map((h) => h.uri)).toEqual([e1, e2, e3]); // oldest-first
     expect(chain.map((h) => h.payload)).toEqual(['one', 'two', 'three']);
   });
@@ -69,7 +90,7 @@ describe('EpisodicMemory', () => {
   it('does not cross-link episodes of different sessions', async () => {
     await em.append({ episodeType: 'message-received', sessionId: 'sA', payload: 'a' });
     const b = await em.append({ episodeType: 'message-received', sessionId: 'sB', payload: 'b' });
-    const [hitB] = await em.findInSession('sB');
+    const [hitB] = await em.findInSession('sB', 'all');
     expect(hitB.precededBy).toBeUndefined();
     expect(hitB.uri).toBe(b);
   });
@@ -79,20 +100,20 @@ describe('EpisodicMemory', () => {
     await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'oxigraph is a triplestore' });
     await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'completely unrelated text here' });
 
-    const hits = await em.retrieve('tell me about oxigraph triplestore', 2);
+    const hits = await em.retrieve('tell me about oxigraph triplestore', 2, 'all');
     expect(hits).toHaveLength(2);
     expect(hits[0].payload).toContain('oxigraph');
     expect(hits[0].relevanceScore).toBeGreaterThan(hits[1].relevanceScore);
   });
 
   it('retrieve returns [] (not an error) when there are no episodes', async () => {
-    expect(await em.retrieve('anything', 5)).toEqual([]);
+    expect(await em.retrieve('anything', 5, 'all')).toEqual([]);
   });
 
   it('findByEntity returns episodes about an entity, newest-first', async () => {
     await em.append({ episodeType: 'message-received', sessionId: SESS, about: ['urn:entity:X'], payload: 'first' });
     await em.append({ episodeType: 'response-sent', sessionId: SESS, about: ['urn:entity:X'], payload: 'second' });
-    const hits = await em.findByEntity('urn:entity:X');
+    const hits = await em.findByEntity('urn:entity:X', 'all');
     expect(hits).toHaveLength(2);
     expect(hits.every((h) => h.about.includes('urn:entity:X'))).toBe(true);
   });
@@ -101,7 +122,7 @@ describe('EpisodicMemory', () => {
     await em.append({ episodeType: 'message-received', sessionId: SESS, payload: 'keep me' });
     await em.append({ episodeType: 'response-sent', sessionId: SESS, payload: 'keep me too' });
 
-    const before = await em.findInSession(SESS);
+    const before = await em.findInSession(SESS, 'all');
     expect(before).toHaveLength(2);
 
     const report = await em.retentionTick();
@@ -115,7 +136,7 @@ describe('EpisodicMemory', () => {
     expect(enabled.noop).toBe(false);
     expect(enabled.deleted).toBe(0);
 
-    const after = await em.findInSession(SESS);
+    const after = await em.findInSession(SESS, 'all');
     expect(after).toHaveLength(2);
   });
 });

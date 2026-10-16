@@ -40,9 +40,18 @@ matters for future recall. Concretely:
 | `goal-pushed` | New goal added to stack | Phase 3 (goal management) |
 | `goal-resolved` | Goal status → resolved | Phase 3 or Phase 6 |
 | `goal-abandoned` | Goal status → abandoned | Phase 3 or metacog |
+| `goal-blocked` | Goal status → blocked (tool or repeated initiative failure) | Tools or the initiative service |
 | `impasse-flagged` | Any phase wrote a `cogt:Impasse` | The phase that flagged |
 | `meta-reflected` | Phase 6 writes the reflective marker | Phase 6 |
 | `consolidation-promoted` | A pattern was promoted from episodic to semantic | Background job |
+
+`impasse-flagged` and `meta-reflected` are written by the metacognition step of
+a cycle (`flagMetacognition`) and only when episodes are on
+(`flagEpisodicMemory`). Both carry `cogt:cycleId`, `cogt:forUser` and, where the
+turn had a goal, `cogt:partOfGoal`. `impasse-flagged` has one episode per impasse
+(payload: kind and detector context); `meta-reflected` has one per cycle
+(payload: a fixed line of the marker's counts). Impasses raised by the weekly
+cross-cycle scan are not written as episodes.
 
 Episodes are **always written**, even when uninteresting. The cost of
 "too many episodes" is solved by retention (§7), not by being selective at
@@ -286,6 +295,78 @@ groups). All configurable in `urn:<agent>:setup`.
 - Episodes whose `cogt:rawText` was retracted via privacy delete (the
   episode itself is hard-deleted, see §7).
 
+### 6.4 As built: pattern 1 (repeated entity assertion)
+
+Behind `cog.flagEpisodicConsolidation` (off by default; `/cog flag
+episodicconsolidation on`). A daily job (`cog.consolidate-episodes`) and the
+owner-only `/cog consolidate-episodes` run it. It deviates from the sketch in
+§6.2 on purpose, as a privacy decision:
+
+- **Target.** A fact is promoted only into the graph `urn:<agent>:user:<key>` of
+  the user whose episodes assert it. There is no worldview promotion path and no
+  parameter that selects another graph. The owner's key is `owner`, so the
+  owner's episodes promote into `urn:<agent>:user:owner`.
+- **Which graph.** The inbound episode records the graph the ingestion writes the
+  sender's own facts to (`cogt:factGraph`, `urn:<agent>:user:<sender id>`). The
+  promotion and the retraction cascade use exactly that graph, not the
+  cognitive user key (`cogt:forUser`, which only scopes the cognitive records;
+  for the owner it is always `owner`, whatever the sender id). Episodes without
+  `cogt:factGraph` (written before it existed) are never promoted from.
+- **Evidence never mixes users.** Episodes are read per user and counted only
+  towards promotions into that user's graph.
+- **Count.** From the claims an episode stored (`cogt:hasClaim`): a triple
+  `(s, p, o)` qualifies with at least K distinct episodes in at least Q distinct
+  evidence groups. A group is one session on one UTC day; the session is the
+  transcript reference without its line index, else the session id, so all
+  messages of one session on one day are one group. Setup keys on `urn:<agent>:setup:cognitive`:
+  `cog:consolidationMinEpisodes` (K, default 3) and `cog:consolidationMinGroups`
+  (Q, default 2); integers 1..100.
+- **Exclusions.** A claim that is not `accepted` (retracted claims no longer
+  exist; superseded and rejected ones are not accepted), a claim asserted in a
+  graph other than the worldview or the user's own graph, a claim that is itself
+  a consolidation, secret-classed episodes or claims, and episodes of a session
+  flagged `cogt:sessionUntrusted`.
+- **Minting.** The existing Claim/Evidence write with `sourceKind
+  "consolidation-episodic"`; the evidence lists the source episodes
+  (`core:sourceEpisode`) and their claims (`core:supportClaim`). A
+  `consolidation-promoted` episode with `forUser` records the claim hash as the
+  tag `claim-hash:<sha256>`.
+- **Idempotence.** The hash over (user, s, p, o) in that ledger means a rerun
+  promotes nothing, and a fact the user retracted after promotion does not come
+  back. A triple or accepted claim already in the user's graph is left alone
+  (no duplicate, no corroboration evidence).
+- **Functional properties.** A promoted claim is superseded by a later value like
+  any other. A promotion never overrides a different accepted value the user's
+  graph holds now (counted as a conflict).
+- **Bounds.** 200 users, the newest 500 claim-bearing episodes per user, 20
+  promotions per user and 100 per run. No model call. No watermark: the counts
+  need the older episodes, and the ledger already makes a rerun a no-op.
+
+- **Re-assertion links the existing claim.** The ingestion skips a triple that
+  already exists and mints no claim, so a repeated fact would never reach K.
+  While episodic memory is on, a duplicate instead returns the existing claim
+  (`StoreResult.reassertedClaimUri`, `IngestionReport.reassertedClaims`) and the
+  episode links it via `cogt:hasClaim`. The existing claim must be accepted, not
+  secret-classed, not a consolidation, and asserted in the graph the same routing
+  rule picks for this sender (own user graph or worldview), with the same
+  subject, predicate and object. An Evidence record (source span, session, time)
+  is added to that claim; no second claim and no second triple. With episodic
+  memory off a duplicate is skipped exactly as before.
+- **Already known.** If the worldview holds an accepted claim for the triple that
+  is not one of the episodes' own claims, nothing is promoted (counted as
+  `alreadyKnown`).
+- **Retraction cascade.** `memory_retract` also hard-deletes the retracting
+  user's own `consolidation-episodic` copy of the same triple (triple, claim,
+  evidence) in the user graph of that user (`urn:<agent>:user:<sender id>`), then rebuilds the
+  inferred graph. Other users' graphs are never touched. The
+  `consolidation-promoted` episode stays, so the ledger still blocks a
+  re-promotion.
+
+Pattern 3 (user preference, "accepted X over Y") is not built. It needs a capture
+of the offered alternatives (which options were on the table and which one was
+chosen), and no episode records that yet, so it cannot be detected
+deterministically.
+
 ---
 
 ## 7. Retention
@@ -302,6 +383,24 @@ Episodic memory grows unboundedly without retention. Tiered scheme:
 The retention job is policy-driven (uses `core:retentionPolicy` from
 `urn:shared:meta`). Privacy-classed episodes (`core:privacyClass "secret"`)
 go cold after 7 days regardless.
+
+### 7.1 Per-user scope
+
+`cog:episodic` is agent-wide, so every episode carries `cogt:forUser`, the
+sender's user key (the id of the per-user graph `urn:<agent>:user:<id>`; the
+verified owner is `owner`, and initiative and system episodes are the owner's).
+Every read (`retrieve`, `findInSession`, `findByEntity`, `recent`, `chainFrom`)
+takes a mandatory `userScope`: a user key, or `"all"` for owner/operator code
+paths. A scoped read never returns another user's episode, and a chain walk
+stops at the user boundary. **Episodes written before the key existed have no
+`cogt:forUser` and are treated as owner-only**: they are returned for the
+owner's key and for `"all"`, never for another user.
+
+An episode whose payload matches a credential shape is also written with
+`core:privacyClass "secret"`, so the rule above (cold after 7 days) applies.
+`EpisodicMemory.deleteForUser(userId)` deletes all episodes of one user and
+re-links the `cogt:precededBy` chain around them; it is not yet called from a
+user-facing command.
 
 Hard-delete cascade (when user requests):
 1. Delete the `cogt:Episode` triples.

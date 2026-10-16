@@ -67,6 +67,28 @@ export interface ToolContext {
    */
   unattended?: boolean;
   /**
+   * IRI of the `message-received` episode recorded for the inbound message that
+   * started THIS turn, when the runtime has recorded one (only on the cycle
+   * manager path of a conversational turn). It is the only value a goal mandate
+   * may point to (docs/initiative-architecture.md §5.1); absent means no
+   * mandate can be given this turn.
+   */
+  inboundEpisodeUri?: string;
+  /**
+   * True only when the verified owner is present in a live, human-facing turn
+   * (`isHumanOwnerTurn`). Synthetic owner senders (scheduler, cron trigger,
+   * webhook, initiative) leave it false even though `isOwner` is true. Owner-
+   * gated goal tools (`arm_goal`, `update_goal_step`) require it; other tools
+   * keep reading `isOwner` / `unattended`.
+   */
+  ownerPresent?: boolean;
+  /**
+   * IRI of the goal an unattended initiative cycle was woken for
+   * (`routingHints.initiativeGoalId`). Set only when `unattended` is true; the
+   * `update_goal_step` tool restricts such a cycle to this one goal.
+   */
+  initiativeGoalUri?: string;
+  /**
    * Cancellation signal wired to the executor's per-call timeout. When a tool
    * exceeds its `timeoutMs`, the executor aborts this signal so long-running
    * work (child processes, network requests) can actually stop instead of
@@ -84,8 +106,19 @@ export interface ToolCall {
   arguments: string; // JSON string
 }
 
+/**
+ * Why a tool call did not run, as decided by the dispatch chokepoint:
+ * `policy-denied` (tool policy, self-protection, initiative gate or sandbox
+ * requirement refused it), `guardian-approval-required` (the call needed an
+ * owner approval that was not granted) or `error` (any other failure, e.g. the
+ * tool threw, timed out or does not exist).
+ */
+export type ToolDenialClass = 'policy-denied' | 'guardian-approval-required' | 'error';
+
 export interface ToolResult {
   success: boolean;
+  /** Set on a failed result; absent on success. */
+  denialClass?: ToolDenialClass;
   output: unknown;
   error?: string;
   artifacts?: ToolArtifact[];

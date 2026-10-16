@@ -57,6 +57,7 @@ export class ToolExecutor {
       const errorStr = `Tool not found: ${toolCall.name}`;
       const result: ToolResult = {
         success: false,
+        denialClass: 'error',
         error: errorStr,
         output: { error: errorStr },
         auditEntry: {
@@ -90,6 +91,7 @@ export class ToolExecutor {
         `and read-only tools; destructive/host tools require an attended session.`;
       const result: ToolResult = {
         success: false,
+        denialClass: 'policy-denied',
         error: errorStr,
         output: { error: errorStr, blockedBy: rule },
         auditEntry: {
@@ -117,6 +119,7 @@ export class ToolExecutor {
         || `Tool invocation denied by self-protection rule '${invocationCheck.rule}'.`;
       const result: ToolResult = {
         success: false,
+        denialClass: 'policy-denied',
         error: errorStr,
         output: { error: errorStr, blockedBy: invocationCheck.rule },
         auditEntry: {
@@ -139,6 +142,7 @@ export class ToolExecutor {
       const errorStr = `Tool execution denied: ${policyCheck.reason}`;
       const result: ToolResult = {
         success: false,
+        denialClass: 'policy-denied',
         error: errorStr,
         output: { error: errorStr },
         auditEntry: {
@@ -160,6 +164,7 @@ export class ToolExecutor {
       const errorStr = `Tool requires an active sandbox, but sandbox is off.`;
       const result: ToolResult = {
         success: false,
+        denialClass: 'policy-denied',
         error: errorStr,
         output: { error: errorStr },
         auditEntry: {
@@ -204,6 +209,10 @@ export class ToolExecutor {
 
       const result = await Promise.race([executePromise, timeoutPromise]);
       clearTimeout(timeoutId!);
+      // A tool that ran and reported failure is an ordinary error, never a
+      // denial: only this executor decides what counts as one.
+      if (result.success) delete result.denialClass;
+      else result.denialClass = 'error';
       
       if (warningStr) {
         result.auditEntry.error = result.auditEntry.error ? `${warningStr} | ${result.auditEntry.error}` : warningStr;
@@ -215,6 +224,7 @@ export class ToolExecutor {
       const errorStr = (e as Error).message || 'Unknown tool execution error';
       const result: ToolResult = {
         success: false,
+        denialClass: 'error',
         error: errorStr,
         output: { error: errorStr },
         auditEntry: {

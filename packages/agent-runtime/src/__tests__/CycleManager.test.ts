@@ -45,7 +45,7 @@ describe('CycleManager', () => {
   beforeEach(async () => {
     store = await makeStore();
     registry = GraphRegistry.create([AGENT]);
-    cm = new CycleManager(store, registry, AGENT);
+    cm = new CycleManager(store, registry, AGENT, undefined, { awaitPersist: true });
   });
 
   it('returns the core result unchanged and persists a completed cycle with 6 phases', async () => {
@@ -65,7 +65,7 @@ describe('CycleManager', () => {
     expect(cycles.bindings![0].s.value).toBe('completed');
 
     const phases = await store.query(
-      `SELECT ?p ?o WHERE { GRAPH <${cyclesGraph}> { ?p a <${COGT}Phase> ; <${COGT}ordinal> ?o } }`,
+      `SELECT ?p ?o WHERE { GRAPH <${cyclesGraph}> { ?p a <${COGT}Phase> ; <${COGT}phaseIndex> ?o } }`,
     );
     expect(phases.bindings).toHaveLength(6);
     const ordinals = phases.bindings!.map((b) => Number(b.o.value)).sort((a, b) => a - b);
@@ -182,41 +182,64 @@ describe('CycleManager', () => {
     expect(byType['response-sent']).toBe('general kenobi');
   });
 
-  it('Phase 2 pulls a matching prior episode into the retrieval buffer (C4)', async () => {
+  it('Phase 2 recalls a prior episode of the session into the retrieval buffer, before the answer (C4)', async () => {
     const SESS = 'sessC6';
     // Turn 1 establishes a topic.
     await cm.runCycle(
       makeEnvelope('oxigraph is the embedded triplestore'),
-      async () => ({ text: 'noted', sessionId: SESS }),
+      async (_t, _g, recordInbound, _p, comprehend) => {
+        await recordInbound(SESS);
+        await comprehend(SESS);
+        return { text: 'noted', sessionId: SESS };
+      },
       (r) => r.sessionId,
       (r) => r.text,
     );
-    // Turn 2 references it; its retrieval buffer should surface turn 1.
-    const secondCycleId = '';
+    // Turn 2: the recall happens in the core, before it answers, and is written by the persist.
+    let recalled: string[] = [];
     await cm.runCycle(
       makeEnvelope('remind me about oxigraph'),
-      async () => ({ text: 'it is the triplestore', sessionId: SESS }),
+      async (_t, _g, recordInbound, _p, comprehend) => {
+        await recordInbound(SESS);
+        const c = await comprehend(SESS);
+        recalled = (c?.entries ?? []).map((e) => e.payload);
+        return { text: 'it is the triplestore', sessionId: SESS };
+      },
       (r) => r.sessionId,
       (r) => r.text,
     );
+    expect(recalled.some((p) => p.includes('oxigraph'))).toBe(true);
+    // Never this turn's own message.
+    expect(recalled).not.toContain('remind me about oxigraph');
 
-    // Find the second cycle's working graph and inspect its retrieval buffer.
-    const graphs = await store.query(
-      `SELECT DISTINCT ?g WHERE { GRAPH ?g {
-         ?e <${COGT}writtenTo> "retrievalBuffer" } }`,
-    );
-    expect(graphs.bindings!.length).toBeGreaterThan(0);
     const retr = await store.query(
-      `SELECT ?payload ?score ?src WHERE { GRAPH ?g {
+      `SELECT ?payload ?score ?src ?u WHERE { GRAPH ?g {
          ?e <${COGT}writtenTo> "retrievalBuffer" ;
             <${COGT}payload> ?payload ;
             <${COGT}retrievalScore> ?score ;
+            <${COGT}forUser> ?u ;
             <${COGT}sourceGraph> ?src } }`,
     );
     expect(retr.bindings!.length).toBeGreaterThan(0);
     expect(retr.bindings!.some((b) => b.payload.value.includes('oxigraph'))).toBe(true);
     expect(retr.bindings!.every((b) => b.src.value === 'urn:ontofelia:cog:episodic')).toBe(true);
-    void secondCycleId;
+    expect(retr.bindings!.every((b) => b.u.value === 'owner')).toBe(true);
+  });
+
+  it('a core that never calls the Phase 2 hook gets no recall and no retrieval entries', async () => {
+    const SESS = 'sessC6b';
+    for (const text of ['oxigraph is the embedded triplestore', 'remind me about oxigraph']) {
+      await cm.runCycle(
+        makeEnvelope(text),
+        async () => ({ text: 'ok', sessionId: SESS }),
+        (r) => r.sessionId,
+        (r) => r.text,
+      );
+    }
+    const retr = await store.query(
+      `SELECT ?e WHERE { GRAPH ?g { ?e <${COGT}writtenTo> "retrievalBuffer" } }`,
+    );
+    expect(retr.bindings ?? []).toHaveLength(0);
   });
 
   it('records tool-called/tool-completed episodes when core emits tool events (C3)', async () => {
@@ -592,18 +615,20 @@ describe('CycleManager', () => {
     expect(section).not.toContain('[Self]');
   });
 
-  it('attributes constraint pressure from a governed tool error (G3)', async () => {
+  it('counts a typed policy denial as constraint pressure, but not an ordinary error of a governed tool (G3)', async () => {
     const SESS = 'sessG3';
     const sm = new SelfModel(store, AGENT);
-    // A constraint governs memory_store; an error there is constraint pressure
-    // even though the error class is not a policy/permission string.
+    // A constraint governs memory_store. An ordinary failure there is not
+    // pressure; only a refusal by policy or a missing approval is.
     await sm.seed({ constraints: [{ id: 'no_secret', label: 'Never persist secrets', applies: ['memory_store'], enforcedBy: 'MemorySkill' }] });
 
     await cm.runCycle(
       makeEnvelope('remember this'),
       async (recordTool) => {
         recordTool({ phase: 'called', toolName: 'memory_store', callId: 'c1', occurredAt: new Date(), argsBrief: 'key' });
-        recordTool({ phase: 'completed', toolName: 'memory_store', callId: 'c1', occurredAt: new Date(), outcome: 'error', errorClass: 'ValidationError' });
+        recordTool({ phase: 'completed', toolName: 'memory_store', callId: 'c1', occurredAt: new Date(), outcome: 'error', errorClass: 'ValidationError', denialClass: 'error' });
+        recordTool({ phase: 'called', toolName: 'exec', callId: 'c2', occurredAt: new Date(), argsBrief: 'command' });
+        recordTool({ phase: 'completed', toolName: 'exec', callId: 'c2', occurredAt: new Date(), outcome: 'error', errorClass: 'tool-error', denialClass: 'policy-denied' });
         return { text: 'tried', sessionId: SESS };
       },
       (r) => r.sessionId,
@@ -714,7 +739,7 @@ describe('CycleManager', () => {
   it('a cognitive-write failure never breaks the user response', async () => {
     // An agent the registry does not know — assertWritable throws on every cog
     // graph, so persistence fails, but runCycle must still return the result.
-    const rogue = new CycleManager(store, GraphRegistry.create(['someoneelse']), AGENT);
+    const rogue = new CycleManager(store, GraphRegistry.create(['someoneelse']), AGENT, undefined, { awaitPersist: true });
     const out = await rogue.runCycle(
       makeEnvelope('hi'),
       async () => ({ text: 'ok', sessionId: 'sX' }),
