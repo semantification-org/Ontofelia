@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AgentRuntime } from '../index.js';
 import { AgentConfig, ProviderAdapter, ChatRequest, ChatResponse, StreamEvent, ChannelType, ChannelBinding } from '@ontofelia/core';
 import { SessionStore } from '@ontofelia/session-store';
@@ -28,6 +28,24 @@ class FailingProvider implements ProviderAdapter {
     throw new Error('Fallback failed too');
   }
   async *chatStream(request: ChatRequest): AsyncIterable<StreamEvent> {
+    yield { type: 'done', response: await this.chat(request) };
+  }
+}
+
+/** The primary model reports a stream error; the fallback model streams content. */
+class StreamFailingProvider implements ProviderAdapter {
+  name = 'stream-failing';
+  async initialize() {}
+  async healthCheck() { return { healthy: true, component: 'dummy', checkedAt: new Date().toISOString() }; }
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    return { id: 'x', content: request.model === 'mock/mock' ? '' : 'fallback success', toolCalls: [], finishReason: 'stop', usage: { promptTokens:0, completionTokens:0, totalTokens:0 } };
+  }
+  async *chatStream(request: ChatRequest): AsyncIterable<StreamEvent> {
+    if (request.model === 'mock/mock') {
+      yield { type: 'error', error: 'Primary model failed' };
+      return;
+    }
+    yield { type: 'text_delta', content: 'fallback success' };
     yield { type: 'done', response: await this.chat(request) };
   }
 }
@@ -70,6 +88,48 @@ describe('AgentRuntime fallback', () => {
     const res = await runtime.handleMessage(createEnv('hello'));
     expect(res.fallbackModel).toBe('google/gemma-3-27b-it:free');
     expect(res.text).toBe('fallback success');
+  });
+
+  it('exposes and logs a used fallback (non-streaming)', async () => {
+    const runtime = new AgentRuntime('test', mockConfig, new FailingProvider(), sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, {
+      name: 'test', defaultModel: 'mock/mock', aliases: {}, autoFallback: true, fallbackModels: ['google/gemma-3-27b-it:free']
+    });
+    expect(runtime.getLastFallback()).toBeNull();
+
+    const warnSpy = vi.spyOn((runtime as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn');
+    await runtime.handleMessage(createEnv('hello'));
+
+    const record = runtime.getLastFallback();
+    expect(record).not.toBeNull();
+    expect(record!.requestedModel).toBe('mock/mock');
+    expect(record!.usedModel).toBe('google/gemma-3-27b-it:free');
+    expect(record!.reason).toContain('Primary model failed');
+    expect(new Date(record!.at).toISOString()).toBe(record!.at);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Model fallback'));
+  });
+
+  it('exposes and logs a used fallback (streaming)', async () => {
+    const runtime = new AgentRuntime('test', mockConfig, new StreamFailingProvider(), sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, {
+      name: 'test', defaultModel: 'mock/mock', aliases: {}, autoFallback: true, fallbackModels: ['google/gemma-3-27b-it:free']
+    });
+    const warnSpy = vi.spyOn((runtime as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn');
+
+    for await (const _chunk of runtime.handleMessageStream(createEnv('hello'))) { /* drain */ }
+
+    const record = runtime.getLastFallback();
+    expect(record).not.toBeNull();
+    expect(record!.requestedModel).toBe('mock/mock');
+    expect(record!.usedModel).toBe('google/gemma-3-27b-it:free');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Model fallback'));
+  });
+
+  it('does not fall back when no fallback models are configured', async () => {
+    const runtime = new AgentRuntime('test', mockConfig, new FailingProvider(), sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry, {
+      name: 'test', defaultModel: 'mock/mock', aliases: {}, autoFallback: true
+    });
+    const res = await runtime.handleMessage(createEnv('hello'));
+    expect(res.text).toMatch(/No models responded/);
+    expect(runtime.getLastFallback()).toBeNull();
   });
 
   it('returns error if all fallbacks fail', async () => {
