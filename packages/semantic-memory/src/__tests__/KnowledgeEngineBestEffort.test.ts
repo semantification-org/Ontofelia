@@ -91,6 +91,7 @@ function makeMockStore(options: {
         const subjectMatch = sparql.match(/ontology#claimSubject>\s+<([^>]+)>/);
         const predicateMatch = sparql.match(/ontology#claimPredicate>\s+<([^>]+)>/);
         const objectMatch = sparql.match(/ontology#claimObject>\s+(<[^>]+>|"[^"]*")/);
+        const graphMatch = sparql.match(/ontology#assertedInGraph>\s+<([^>]+)>/);
         const claimUriMatch = sparql.match(/<(urn:claim:[^>]+)>/);
         if (subjectMatch && predicateMatch && objectMatch && claimUriMatch) {
           claims.push({
@@ -98,7 +99,9 @@ function makeMockStore(options: {
             subject: subjectMatch[1],
             predicate: predicateMatch[1],
             object: objectMatch[1],
-            graph: 'urn:ontofelia:worldview',
+            // The graph the claim was really asserted in: findConflictingClaims
+            // only lets claims in the new fact's target graph compete.
+            graph: graphMatch?.[1] ?? 'urn:ontofelia:worldview',
           });
         }
       }
@@ -168,7 +171,8 @@ describe('KnowledgeEngine best-effort failure visibility', () => {
 
     const pending = engine.getPendingTruthMaintenance();
     expect(pending).toHaveLength(1);
-    expect(pending[0].graph).toBe('urn:ontofelia:worldview');
+    // "User" is the owner, so the fact lives in the owner's private graph.
+    expect(pending[0].graph).toBe('urn:ontofelia:user:owner');
   });
 
   it('path 2 — on-write reasoning: logs and counts without blocking the write', async () => {
