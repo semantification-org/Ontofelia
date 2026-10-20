@@ -30,6 +30,7 @@ function captureAdapter(): { get: () => InMemoryAdapter; release: () => void } {
   let captured: InMemoryAdapter | undefined;
   const original = InMemoryAdapter.prototype.initialize;
   const spy = vi.spyOn(InMemoryAdapter.prototype, 'initialize').mockImplementation(function (this: InMemoryAdapter, cfg) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     captured = this;
     return original.call(this, cfg);
   });
