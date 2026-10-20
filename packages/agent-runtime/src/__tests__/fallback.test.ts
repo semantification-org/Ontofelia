@@ -50,6 +50,14 @@ class StreamFailingProvider implements ProviderAdapter {
   }
 }
 
+/** The fields of a streamed chunk that these tests read. */
+interface StreamCollected {
+  type: string;
+  text?: string;
+  content?: string;
+  fallbackModel?: string;
+}
+
 describe('AgentRuntime fallback', () => {
   let sessionStore: SessionStore;
   let toolRegistry: ToolRegistry;
@@ -165,7 +173,7 @@ describe('AgentRuntime fallback', () => {
       });
       const debugLabels: string[] = [];
       runtime.onDebug((e) => { if (e.phase === 'error') debugLabels.push(e.label); });
-      const chunks: any[] = [];
+      const chunks: StreamCollected[] = [];
       for await (const chunk of runtime.handleMessageStream(createEnv('hello'))) chunks.push(chunk);
       return { chunks, debugLabels };
     };
@@ -185,7 +193,7 @@ describe('AgentRuntime fallback', () => {
       const last = thrown.chunks[thrown.chunks.length - 1];
       expect(last.type).toBe('stream_end');
       expect(last.fallbackModel).toBeUndefined();
-      const shape = (cs: any[]) => cs.map((c) => ({ type: c.type, text: c.text ?? c.content, fallbackModel: c.fallbackModel }));
+      const shape = (cs: StreamCollected[]) => cs.map((c) => ({ type: c.type, text: c.text ?? c.content, fallbackModel: c.fallbackModel }));
       expect(shape(thrown.chunks)).toEqual(shape(chunked.chunks));
     });
   });
