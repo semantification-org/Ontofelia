@@ -1,0 +1,18 @@
+[package]
+name = "disk-store"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16.14", default-features = false, features = ["napi4"] }
+napi-derive = "2.16.12"
+# Default features include the RocksDB backend, which is what makes the store
+# persistent. Pinned exactly: the on-disk format is tied to the crate version.
+oxigraph = { version = "=0.5.13" }
+
+[build-dependencies]
+napi-build = "2.1.3"
