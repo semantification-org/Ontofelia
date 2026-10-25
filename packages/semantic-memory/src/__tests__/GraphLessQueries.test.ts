@@ -6,20 +6,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { FusekiAdapter } from '../adapters/FusekiAdapter.js';
 import { FusekiManager } from '../fuseki/FusekiManager.js';
 import { ReflectionRunner } from '../reflection/ReflectionRunner.js';
 
 const AGENT = 'ontofelia';
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 
 async function insert(graph: string, triples: string) {
   await store.update(`INSERT DATA { GRAPH <${graph}> { ${triples} } }`);
 }
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'graphless-sm-')), port: 0, endpoint: '' } as never);
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import type { FactContext, FactInput } from '../types.js';
 
@@ -43,8 +43,8 @@ const LITERAL_PAYLOAD =
 const UNICODE_ESCAPED_IRI =
   `urn:a> . } } ; ${PWN_UPDATE} ; INSERT DATA { GRAPH <urn:g> { <urn:x`.replace(/>/g, '\\u003E');
 
-async function makeStore(): Promise<OxigraphAdapter> {
-  const store = new OxigraphAdapter();
+async function makeStore(): Promise<OxigraphTestAdapter> {
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',
@@ -55,19 +55,19 @@ async function makeStore(): Promise<OxigraphAdapter> {
   return store;
 }
 
-async function pwnCount(store: OxigraphAdapter): Promise<number> {
+async function pwnCount(store: OxigraphTestAdapter): Promise<number> {
   const res = await store.query(`SELECT ?s WHERE { GRAPH <${PWN}> { ?s ?p ?o } }`);
   return res.bindings?.length ?? 0;
 }
 
-async function ask(store: OxigraphAdapter, q: string): Promise<boolean> {
+async function ask(store: OxigraphTestAdapter, q: string): Promise<boolean> {
   return store.ask(q);
 }
 
 type Rewrite = (sparql: string, res: { bindings?: Array<Record<string, unknown>> }) => void;
 
 /** Proxy over the real adapter that lets a test rewrite the engine's SELECT results. */
-function poisoned(store: OxigraphAdapter, rewrite: () => Rewrite | undefined): OxigraphAdapter {
+function poisoned(store: OxigraphTestAdapter, rewrite: () => Rewrite | undefined): OxigraphTestAdapter {
   return new Proxy(store, {
     get(target, key) {
       if (key === 'query') {
@@ -88,7 +88,7 @@ const isConflictQuery = (q: string) => q.includes('SELECT ?claim ?o ?g');
 const isDetailsQuery = (q: string) => q.includes('SELECT ?s ?p ?o') && q.includes('core:claimSubject');
 
 describe('KnowledgeEngine SPARQL safety', () => {
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   let engine: KnowledgeEngine;
   let warn: ReturnType<typeof vi.spyOn>;
 

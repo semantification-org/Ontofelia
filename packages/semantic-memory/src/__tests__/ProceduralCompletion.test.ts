@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import {
   ProceduralMemory,
   DURATION_WINDOW,
@@ -19,7 +19,7 @@ const BASE = Date.parse('2026-05-20T10:00:00Z');
 const WIDE = { since: new Date('2000-01-01T00:00:00Z'), until: new Date('2100-01-01T00:00:00Z') };
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

@@ -170,6 +170,12 @@ export const configSchema = z.object({
   }).default({ maxPerDay: 5, minPriorityDuringQuietHours: 'high' }),
   memory: z.object({
     backend: z.enum(['fuseki', 'oxigraph', 'memory']).default('oxigraph'),
+    /**
+     * Storage of the embedded Oxigraph backend. 'file' keeps the dataset in memory and
+     * re-dumps it to an N-Quads file after every write; 'disk' uses the native on-disk
+     * store (needs the built @ontofelia/disk-store addon). Only read when backend is 'oxigraph'.
+     */
+    oxigraphStore: z.enum(['file', 'disk']).default('file'),
     triplestore: z.object({
       type: z.enum(['sidecar', 'remote', 'embedded']).default('embedded'),
       dataDir: z.string().default('~/.ontofelia/triplestore'),
@@ -224,6 +230,7 @@ export const configSchema = z.object({
     sparqlTimeoutMs: z.number().int().default(5000)
   }).default({
     backend: 'oxigraph',
+    oxigraphStore: 'file',
     triplestore: {
       type: 'embedded',
       dataDir: '~/.ontofelia/triplestore',

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { importVault } from '../ingestion/VaultImporter.js';
 
@@ -23,7 +23,7 @@ describe('importVault with hostile frontmatter values', () => {
   it('imports without error, round-trips literals and injects nothing', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const store = new OxigraphAdapter();
+    const store = createOxigraphTestAdapter();
     await store.initialize({ backend: 'oxigraph', type: 'embedded',
       dataDir: mkdtempSync(join(tmpdir(), 'hostile-store-')), port: 0, endpoint: '' } as never);
     const engine = new KnowledgeEngine(store as never);

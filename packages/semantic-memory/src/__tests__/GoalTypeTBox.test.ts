@@ -9,17 +9,17 @@ import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 
 const COGT = 'urn:shared:ontology#cog/';
 const OWL = 'http://www.w3.org/2002/07/owl#';
 const RDFS = 'http://www.w3.org/2000/01/rdf-schema#';
 const TTL = join(dirname(fileURLToPath(import.meta.url)), '..', 'ontologies', 'ontofelia-core.ttl');
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'goal-type-tbox-')), port: 0, endpoint: '' } as never);
   await store.putGraph('urn:test:tbox', readFileSync(TTL, 'utf-8'), 'turtle');

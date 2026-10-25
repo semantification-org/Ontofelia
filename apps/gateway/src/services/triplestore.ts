@@ -6,7 +6,7 @@ import type { Logger } from 'pino';
 import { PRIMARY_AGENT_ID } from '@ontofelia/core';
 import { seedDefaultsForFreshInstall } from '@ontofelia/agent-runtime';
 import {
-  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter,
+  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter, OxigraphDiskAdapter,
   OntologyManager, ConflictDetector, ReflectionRunner, KnowledgeEngine,
   FusekiWatchdog, GraphRegistry, GraphUriResolver
 } from '@ontofelia/semantic-memory';
@@ -43,12 +43,22 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
     }, logger);
     fusekiWatchdog.start();
   } else if (config.memory.backend === 'oxigraph') {
-    const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
-    triplestore = new OxigraphAdapter();
-    await triplestore.initialize({
-      backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
-    });
-    logger.info('Started Oxigraph Triplestore in embedded mode.');
+    if (config.memory.oxigraphStore === 'disk') {
+      // Separate directory: the on-disk store does not read the file adapter's dataset.nq.
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph-disk');
+      triplestore = new OxigraphDiskAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      logger.info('Started Oxigraph Triplestore in embedded mode (on-disk store).');
+    } else {
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
+      triplestore = new OxigraphAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      logger.info('Started Oxigraph Triplestore in embedded mode.');
+    }
   } else {
     triplestore = new InMemoryAdapter();
     await triplestore.initialize({

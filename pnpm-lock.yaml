@@ -517,6 +517,9 @@ importers:
       '@ontofelia/core':
         specifier: workspace:*
         version: link:../core
+      '@ontofelia/disk-store':
+        specifier: workspace:*
+        version: link:../disk-store
       '@ontofelia/reasoner':
         specifier: link:../reasoner
         version: link:../reasoner

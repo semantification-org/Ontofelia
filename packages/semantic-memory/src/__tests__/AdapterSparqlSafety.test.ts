@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import oxigraph from 'oxigraph';
 import type { Triple } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { FusekiAdapter } from '../adapters/FusekiAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 
@@ -18,8 +18,8 @@ const LITERAL_PAYLOAD =
   'x\\" . } } ; INSERT DATA { GRAPH <urn:pwn> { <urn:pwn:a> <urn:pwn:b> <urn:pwn:c> } } ' +
   '; INSERT DATA { GRAPH <urn:g> { <urn:s> <urn:p> <urn:x> } } #';
 
-async function makeStore(): Promise<OxigraphAdapter> {
-  const store = new OxigraphAdapter();
+async function makeStore(): Promise<OxigraphTestAdapter> {
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',
@@ -30,18 +30,18 @@ async function makeStore(): Promise<OxigraphAdapter> {
   return store;
 }
 
-async function count(store: OxigraphAdapter, graph: string): Promise<number> {
+async function count(store: OxigraphTestAdapter, graph: string): Promise<number> {
   const res = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
   return res.bindings?.length ?? 0;
 }
 
-async function totalQuads(store: OxigraphAdapter): Promise<number> {
+async function totalQuads(store: OxigraphTestAdapter): Promise<number> {
   const res = await store.query('SELECT ?g ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } }');
   return res.bindings?.length ?? 0;
 }
 
 describe('OxigraphAdapter SPARQL safety', () => {
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   beforeEach(async () => { store = await makeStore(); });
 
   it('rejects an IRI-shaped object payload and injects nothing', async () => {

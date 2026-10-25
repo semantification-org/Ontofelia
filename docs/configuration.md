@@ -109,6 +109,7 @@ All values shown are the defaults.
   // Semantic Memory
   memory: {
     backend: "oxigraph",            // "oxigraph" (default, embedded) | "fuseki" (legacy sidecar) | "memory" (no persistence)
+    oxigraphStore: "file",          // "file" (default) | "disk" - storage of the embedded Oxigraph backend, see below
     triplestore: {
       type: "embedded",             // "embedded" | "sidecar" | "remote"
       dataDir: "~/.ontofelia/triplestore",
@@ -154,6 +155,8 @@ All values shown are the defaults.
   }
 }
 ```
+
+`memory.oxigraphStore` (only read when `memory.backend` is `"oxigraph"`): `"file"` (default) keeps the dataset in memory and rewrites `~/.ontofelia/triplestore/oxigraph/dataset.nq` after every write. `"disk"` uses the native on-disk store (RocksDB) in `~/.ontofelia/triplestore/oxigraph-disk`, where a write does not grow with the dataset size. It needs the native binary (`ONTOFELIA_BUILD_DISK_STORE=1 pnpm --filter @ontofelia/disk-store build`; startup fails with that hint when it is missing). It starts with an empty store and does not import `dataset.nq` yet, so switching back and forth shows two separate datasets. SPARQL endpoint queries then run in the gateway process, without the worker that enforces the query deadline.
 
 Keys the schema does not know are ignored when the file is loaded, so a config file that still contains removed options (`messages`, `routing`, `commands`, `session.scope`, `security.requireGuardian`) keeps loading; those options never had any effect and are dropped.
 
