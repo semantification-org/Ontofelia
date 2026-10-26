@@ -321,6 +321,76 @@ suite('OxigraphDiskAdapter', () => {
     });
   });
 
+  describe('importFileDataset', () => {
+    const NQ =
+      `<urn:s:a> <urn:p:name> "Alice" <${G1}> .\n` +
+      `<urn:s:a> <urn:p:label> "Alicia"@es <${G1}> .\n` +
+      `<urn:s:b> <urn:p:name> "Bob" <${G2}> .\n` +
+      `<urn:s:c> <urn:p:name> "Default" .\n`;
+    const writeNq = (content: string) => {
+      const f = join(tmp(), 'dataset.nq');
+      writeFileSync(f, content);
+      return f;
+    };
+    const count = async (a: OxigraphDiskAdapter, where: string) =>
+      Number((await a.query(`SELECT (COUNT(*) AS ?n) WHERE { ${where} }`)).bindings![0].n.value);
+
+    it('imports into an empty store and keeps the graphs', async () => {
+      const a = await openDisk(tmp());
+      const r = await a.importFileDataset(writeNq(NQ));
+      expect(r).toEqual({ imported: true, quads: 4 });
+      expect(await count(a, `GRAPH <${G1}> { ?s ?p ?o }`)).toBe(2);
+      expect(await count(a, `GRAPH <${G2}> { ?s ?p ?o }`)).toBe(1);
+      expect(await count(a, '?s ?p ?o')).toBe(1);
+      expect(await a.ask(`ASK { GRAPH <${G1}> { <urn:s:a> <urn:p:label> "Alicia"@es } }`)).toBe(true);
+      expect(await a.ask(`ASK { <urn:s:c> <urn:p:name> "Default" }`)).toBe(true);
+    });
+
+    it('does not import twice and does not duplicate', async () => {
+      const a = await openDisk(tmp());
+      const f = writeNq(NQ);
+      await a.importFileDataset(f);
+      const r = await a.importFileDataset(f);
+      expect(r).toEqual({ imported: false, quads: 4, reason: 'store not empty' });
+      expect(await count(a, 'GRAPH ?g { ?s ?p ?o }')).toBe(3);
+    });
+
+    it('does not import into a store that already holds data', async () => {
+      const a = await openDisk(tmp());
+      await a.putGraph(G2, '<urn:s:x> <urn:p:name> "X" .\n', 'ntriples');
+      const r = await a.importFileDataset(writeNq(NQ));
+      expect(r).toEqual({ imported: false, quads: 1, reason: 'store not empty' });
+    });
+
+    it('reports a missing file', async () => {
+      const a = await openDisk(tmp());
+      const r = await a.importFileDataset(join(tmp(), 'missing.nq'));
+      expect(r).toEqual({ imported: false, quads: 0, reason: 'no file' });
+    });
+
+    it('reports a zero-byte file', async () => {
+      const a = await openDisk(tmp());
+      const r = await a.importFileDataset(writeNq(''));
+      expect(r).toEqual({ imported: false, quads: 0, reason: 'empty file' });
+    });
+
+    it('throws naming the file for a malformed file and leaves the store empty', async () => {
+      const a = await openDisk(tmp());
+      const f = writeNq(`${NQ}this is not n-quads\n`);
+      await expect(a.importFileDataset(f)).rejects.toThrow(f);
+      expect(await count(a, 'GRAPH ?g { ?s ?p ?o }')).toBe(0);
+      expect(await count(a, '?s ?p ?o')).toBe(0);
+      expect(await a.exportDataset()).toBe('');
+    });
+
+    it('leaves the source file unchanged', async () => {
+      const a = await openDisk(tmp());
+      const f = writeNq(NQ);
+      await a.importFileDataset(f);
+      expect(readFileSync(f, 'utf-8')).toBe(NQ);
+    });
+  });
+
   describe('importDataset', () => {
     it('throws for a triple format without a graph', async () => {
       const a = await openDisk(tmp());

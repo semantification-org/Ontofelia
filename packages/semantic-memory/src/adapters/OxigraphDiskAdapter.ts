@@ -123,10 +123,12 @@ function tripleMime(format: RdfFormat): string {
  * dump never ran. If `fn` throws, earlier writes stay (no rollback), as in the
  * file adapter.
  *
- * `initialize()` starts from whatever the directory holds. It neither reads
- * nor writes `dataset.nq`; migrating an existing file dataset is a separate
- * step. `backup()` writes the same N-Quads file format as the file adapter, so
- * backups are interchangeable.
+ * `initialize()` starts from whatever the directory holds and never reads
+ * `dataset.nq` itself. To move an existing install over, the caller runs
+ * `importFileDataset()` once right after `initialize()`: it loads the file
+ * adapter's N-Quads file when (and only when) the store is still empty, and
+ * leaves the file untouched, so it stays as a way back. `backup()` writes the
+ * same N-Quads file format as the file adapter, so backups are interchangeable.
  *
  * It exposes no `dataFilePath` or `dumpCount`, so `createQueryExecutor` falls
  * back to the in-process executor for this adapter (no worker, no hard query
@@ -268,6 +270,33 @@ export class OxigraphDiskAdapter implements TriplestoreAdapter {
       throw new Error(`importDataset: format '${format}' carries no graph; pass a target graph URI`);
     }
     store.load(data, tripleMime(format), graphUri);
+  }
+
+  /**
+   * One-time import of the file adapter's `dataset.nq`. Loads the file as
+   * N-Quads (quads keep their graphs) only when the store holds no quads and
+   * the file exists and has content; otherwise it reports why it did not.
+   * The source file is only read, never modified or deleted. If the file does
+   * not parse, the store is cleared again (it was empty before) and the error,
+   * which names the file, is rethrown.
+   */
+  async importFileDataset(
+    nquadsPath: string
+  ): Promise<{ imported: boolean; quads: number; reason?: string }> {
+    const store = this.requireStore();
+    const before = store.len();
+    if (before > 0) return { imported: false, quads: before, reason: 'store not empty' };
+    if (!existsSync(nquadsPath)) return { imported: false, quads: 0, reason: 'no file' };
+    const data = await fs.readFile(nquadsPath, 'utf-8');
+    if (data.trim().length === 0) return { imported: false, quads: 0, reason: 'empty file' };
+    try {
+      store.load(data, NQUADS_MIME);
+      store.flush();
+    } catch (e) {
+      store.update('CLEAR ALL');
+      throw new Error(`Could not import ${nquadsPath} into the on-disk store: ${(e as Error).message}`);
+    }
+    return { imported: true, quads: store.len() };
   }
 
   async backup(targetDir: string): Promise<string> {
