@@ -51,6 +51,14 @@ export function defaultOnFlags(): CognitiveFlagInfo[] {
   return COGNITIVE_FLAGS.filter((f) => !(f.name in DEFAULT_OFF_FLAGS));
 }
 
+/** Boot log line after the defaults were written; the off list comes from {@link DEFAULT_OFF_FLAGS}. */
+export function freshInstallSeededMessage(flagsOn: number): string {
+  const off = Object.keys(DEFAULT_OFF_FLAGS)
+    .map((name) => name.replace(/^flag/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase())
+    .join(', ');
+  return `Cognitive layer defaults written for a new install (${flagsOn} flags on; ${off} stay off)`;
+}
+
 function configSubject(agentId: string): string {
   return `urn:${agentId}:setup:cognitive`;
 }

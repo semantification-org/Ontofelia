@@ -71,7 +71,7 @@ export type { GoalSummary } from './cognitive/goalSummary.js';
 // both read it). Re-exported so tests and the executor import ONE list.
 export { INITIATIVE_ALLOWED_TOOLS } from './initiativeTools.js';
 export { CognitiveConfig } from './cognitive/CognitiveConfig.js';
-export { seedDefaultsForFreshInstall, defaultOnFlags, COGNITIVE_DEFAULTS_VERSION } from './cognitive/CognitiveDefaults.js';
+export { seedDefaultsForFreshInstall, defaultOnFlags, freshInstallSeededMessage, COGNITIVE_DEFAULTS_VERSION } from './cognitive/CognitiveDefaults.js';
 // Owner-notification service (docs/initiative-architecture.md §7). Re-exported
 // so the gateway composition root can construct it, drop it into
 // InitiativeService as the real sink, and back the notify_owner tool with it.
