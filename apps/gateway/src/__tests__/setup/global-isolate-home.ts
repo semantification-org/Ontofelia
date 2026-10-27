@@ -23,7 +23,18 @@ declare module 'vitest' {
 export default function setup(project: TestProject): () => void {
   const root = mkdtempSync(join(tmpdir(), 'ontofelia-gateway-run-'));
   project.provide('isolatedHomeRoot', root);
+  // Workers are forked after this runs and inherit the environment, so every
+  // tmpdir() in a test file (scratch stores, session and audit directories)
+  // lands inside the root as well and goes with it, cleaned up or not.
+  const previousTmp = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+  process.env.TMPDIR = root;
+  process.env.TMP = root;
+  process.env.TEMP = root;
   const remove = (): void => {
+    for (const [key, value] of Object.entries(previousTmp)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(root, { recursive: true, force: true });
   };
   // Vitest ends the main process without running the teardown when a worker

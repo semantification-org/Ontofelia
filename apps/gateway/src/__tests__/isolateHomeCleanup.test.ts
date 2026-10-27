@@ -16,15 +16,21 @@ const vitestBin = join(
 const privateTmp = mkdtempSync(join(inject('isolatedHomeRoot'), 'nested-'));
 
 function leftovers(): string[] {
-  return readdirSync(privateTmp).filter((name) => name.startsWith('ontofelia-gateway-'));
+  return readdirSync(privateTmp).filter(
+    (name) => name.startsWith('ontofelia-gateway-') || name.startsWith('stray-scratch-'),
+  );
+}
+
+function spawnFixtures(filters: string[]): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } {
+  return spawnSync(process.execPath, [vitestBin, 'run', '--no-color', ...filters], {
+    cwd: fixtureDir,
+    env: { ...process.env, TMPDIR: privateTmp, TMP: privateTmp, TEMP: privateTmp },
+    encoding: 'utf8',
+  });
 }
 
 function runFixtures(...filters: string[]): string {
-  const run = spawnSync(process.execPath, [vitestBin, 'run', '--no-color', ...filters], {
-    cwd: fixtureDir,
-    env: { ...process.env, TMPDIR: privateTmp },
-    encoding: 'utf8',
-  });
+  const run = spawnFixtures(filters);
   // Positive control: the run really ended abnormally.
   expect(run.status).not.toBe(0);
   return `${run.stdout}\n${run.stderr}`;
@@ -37,5 +43,13 @@ it('removes every temporary home when a test file fails to load', () => {
 
 it('removes every temporary home when a worker is killed', () => {
   runFixtures('workerCrash');
+  expect(leftovers()).toEqual([]);
+}, 120_000);
+
+it('removes scratch directories a test file leaves in the temp directory', () => {
+  const run = spawnFixtures(['strayTmp']);
+  // Positive control: the fixture ran and created its directory.
+  expect(`${run.stdout}\n${run.stderr}`).toMatch(/1 passed/);
+  expect(run.status).toBe(0);
   expect(leftovers()).toEqual([]);
 }, 120_000);
