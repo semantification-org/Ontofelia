@@ -135,9 +135,11 @@ function tripleMime(format: RdfFormat): string {
  * same N-Quads file format as the file adapter, so backups are interchangeable.
  *
  * `query()` runs on the calling thread and cannot be interrupted. Use
- * `queryWithDeadline()` for a hard deadline: the native store evaluates the
- * query on a thread-pool task and cancels it when the time is up, so the main
- * thread stays free and a runaway query ends with a `QueryTimeoutError`.
+ * `queryWithDeadline()` for a deadline: the native store evaluates the query
+ * on a thread-pool task, so the main thread stays free, and the caller gets a
+ * `QueryTimeoutError` at the deadline. The native evaluation is cancelled too,
+ * but it stops only when it next reads data, so a pure cross product can keep
+ * one libuv thread-pool thread busy for a while after the caller has its answer.
  * `createQueryExecutor` returns a `DiskQueryExecutor` for this adapter, which
  * uses it.
  */
@@ -221,18 +223,32 @@ export class OxigraphDiskAdapter implements TriplestoreAdapter {
   }
 
   /**
-   * Runs a read-only query off the main thread and cancels it after
-   * `deadlineMs`. Rejects with `QueryTimeoutError` on expiry; other failures
-   * are wrapped like in `query()`.
+   * Runs a read-only query off the main thread. The caller gets a
+   * `QueryTimeoutError` at `deadlineMs`, on time, because a JS timer is raced
+   * against the native task. The native evaluation is cancelled as well, but
+   * it stops only when it next reads data, so a pure cross product can keep
+   * one libuv thread-pool thread busy for a while after the rejection. Other
+   * failures are wrapped like in `query()`.
    */
   async queryWithDeadline(sparql: string, deadlineMs: number): Promise<SparqlResult> {
+    let timer: NodeJS.Timeout | undefined;
     try {
-      const text = await this.requireStore().queryAsync(sparql, null, deadlineMs);
+      const native = this.requireStore().queryAsync(sparql, null, deadlineMs);
+      // If the timer wins, the native task settles later; keep that from being
+      // an unhandled rejection.
+      native.catch(() => undefined);
+      const expiry = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new QueryTimeoutError(deadlineMs)), deadlineMs);
+      });
+      const text = await Promise.race([native, expiry]);
       return convertDiskResult(text);
     } catch (e) {
+      if (e instanceof QueryTimeoutError) throw e;
       const message = (e as Error).message;
       if (message.startsWith(NATIVE_QUERY_TIMEOUT)) throw new QueryTimeoutError(deadlineMs);
       throw new Error(`SPARQL Query failed in Oxigraph: ${message}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -433,6 +433,42 @@ suite('OxigraphDiskAdapter', () => {
       expect(await a.ask(`ASK { GRAPH <${G1}> { <urn:s:new> <urn:p:n> <urn:o:new> } }`)).toBe(true);
     });
 
+    it('answers at the deadline even when the native task only stops at its next read', async () => {
+      const a = await openDisk(tmp());
+      await a.insertTriples('urn:p:g', Array.from({ length: 300 }, (_, i) => ({
+        subject: `urn:p:s${i}`, predicate: 'urn:p:next', object: `urn:p:s${i + 1}`,
+      })));
+      // Unconstrained cross product: the evaluation reads the next quad only
+      // rarely, so the native cancellation alone answers seconds after the deadline.
+      const CROSS =
+        'SELECT (COUNT(*) AS ?c) WHERE { GRAPH <urn:p:g> { ?a ?b ?c . ?d ?e ?f . ?g ?h ?i . ?j ?k ?l } }';
+      // Keep the native promise so the test can wait for its background task.
+      const store = (a as unknown as { store: { queryAsync(...args: unknown[]): Promise<string> } }).store;
+      const original = store.queryAsync.bind(store);
+      const natives: Array<Promise<string>> = [];
+      store.queryAsync = (...args: unknown[]) => {
+        const p = original(...args);
+        natives.push(p);
+        return p;
+      };
+      const executor = createQueryExecutor(a);
+
+      const started = Date.now();
+      const failure = await executor.execute(CROSS, 300).then(() => undefined, (e: unknown) => e);
+      const elapsed = Date.now() - started;
+      expect(failure).toBeInstanceOf(QueryTimeoutError);
+      expect(elapsed).toBeGreaterThanOrEqual(300);
+      expect(elapsed).toBeLessThan(1500);
+
+      // The native task finishes on its own thread later; wait for it so it does
+      // not run into the next test, then check the store still answers.
+      expect(natives).toHaveLength(1);
+      await natives[0].then(() => undefined, () => undefined);
+      const ok = await executor.execute(`SELECT ?o WHERE { GRAPH <urn:p:g> { <urn:p:s7> <urn:p:next> ?o } }`, 5000);
+      expect(ok.bindings![0].o.value).toBe('urn:p:s8');
+      // the wait for the background task takes several seconds, longer than the default timeout
+    }, 30_000);
+
     it('wraps other failures like query() does', async () => {
       const a = await openDisk(tmp());
       const error = await a.queryWithDeadline('SELEKT nonsense', 1000).then(() => undefined, (e: unknown) => e);

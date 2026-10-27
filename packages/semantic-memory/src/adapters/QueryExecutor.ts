@@ -31,10 +31,12 @@ export class InProcessQueryExecutor implements QueryExecutor {
 }
 
 /**
- * Runs queries on the native on-disk store's own thread-pool task, which the
- * store cancels at the deadline (`OxigraphDiskAdapter.queryWithDeadline`). The
- * main thread is never blocked and there is no worker or replica to manage.
- * No queue: RocksDB reads are safe to run concurrently, and each query carries
+ * Runs queries on the native on-disk store's own thread-pool task
+ * (`OxigraphDiskAdapter.queryWithDeadline`). The caller gets the timeout at the
+ * deadline; the native evaluation is cancelled, but it stops only when it next
+ * reads data, so a pure cross product can keep one thread-pool thread busy for
+ * a while afterwards. The main thread is never blocked and there is no worker
+ * or replica to manage. No queue: RocksDB reads are safe to run concurrently, and each query carries
  * its own deadline from the moment it starts.
  */
 export class DiskQueryExecutor implements QueryExecutor {
