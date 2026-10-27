@@ -59,6 +59,25 @@ if (!hasCargo()) {
   process.exit(1);
 }
 
+// bindgen (run by the bundled RocksDB's build script) uses libclang, which on
+// some Linux systems does not find the compiler's own headers such as stdbool.h.
+// When the caller has set nothing, point it at GCC's include directory.
+const buildEnv = { ...process.env };
+if (platform === 'linux' && !buildEnv.BINDGEN_EXTRA_CLANG_ARGS) {
+  try {
+    const gccInclude = execSync('gcc -print-file-name=include', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (existsSync(join(gccInclude, 'stdbool.h'))) {
+      buildEnv.BINDGEN_EXTRA_CLANG_ARGS = `-I${gccInclude}`;
+      console.log(`[disk-store] BINDGEN_EXTRA_CLANG_ARGS not set - using -I${gccInclude}`);
+    }
+  } catch {
+    // No gcc on the PATH: leave the environment as it is.
+  }
+}
+
 console.log('[disk-store] compiling from source with napi/cargo (the bundled RocksDB takes several minutes)...');
 try {
   const binName = platform === 'win32' ? 'napi.cmd' : 'napi';
@@ -66,6 +85,7 @@ try {
   const args = ['build', '--platform', '--release'];
   execFileSync(existsSync(napiBin) ? napiBin : 'napi', args, {
     cwd: pkgDir,
+    env: buildEnv,
     stdio: 'inherit',
     shell: platform === 'win32',
   });
