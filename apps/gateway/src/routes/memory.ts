@@ -31,6 +31,7 @@ const AGENT_GRAPH_ROLES = [
   ['evidence', GraphUriResolver.getEvidenceGraph(PRIMARY_AGENT_ID)],
   ['worldview', GraphUriResolver.getWorldviewGraph(PRIMARY_AGENT_ID)],
   ['schema', GraphUriResolver.getSchemaGraph(PRIMARY_AGENT_ID)],
+  ['ontology', GraphUriResolver.getOntologyGraph(PRIMARY_AGENT_ID)],
   ['conflicts', GraphUriResolver.getConflictsGraph(PRIMARY_AGENT_ID)],
   ['inferred', GraphUriResolver.getInferredGraph(PRIMARY_AGENT_ID)],
 ] as const;

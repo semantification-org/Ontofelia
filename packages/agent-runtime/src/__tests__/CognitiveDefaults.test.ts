@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { MessageEnvelope, ChannelType } from '@ontofelia/core';
 import { COGNITIVE_FLAGS } from '../cognitive/CognitiveConfig.js';
 import {
-  seedDefaultsForFreshInstall, defaultOnFlags, readDefaultsMarker, COGNITIVE_DEFAULTS_VERSION,
+  seedDefaultsForFreshInstall, defaultOnFlags, readDefaultsMarker, freshInstallSeededMessage, DEFAULT_OFF_FLAGS, COGNITIVE_DEFAULTS_VERSION,
 } from '../cognitive/CognitiveDefaults.js';
 import { makeEnv, envelope, send, cleanup, setNumber, setFlag, seedSkillAndSelf, rows, OWNER, ALICE, AGENT, COGT, type Env } from './promptHarness.js';
 import { bootFreshInstall } from './freshInstall.js';
@@ -205,5 +205,13 @@ describe('legacy path for an existing install', () => {
     expect(booted.probe.answers[0].system).toBe(plain.probe.answers[0].system);
     expect(booted.probe.answers[0].system).not.toContain('[Self]');
     expect(await rows(booted.store, `SELECT ?s WHERE { GRAPH ?g { ?s a <${COGT}Cycle> } }`)).toHaveLength(0);
+  });
+});
+
+describe('boot log line', () => {
+  it('names every flag that stays off, taken from the list itself', () => {
+    const line = freshInstallSeededMessage(7);
+    expect(line).toBe('Cognitive layer defaults written for a new install (7 flags on; retention, initiative, preference consolidation stay off)');
+    expect(Object.keys(DEFAULT_OFF_FLAGS)).toHaveLength(3);
   });
 });

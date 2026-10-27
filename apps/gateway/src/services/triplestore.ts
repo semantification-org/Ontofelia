@@ -4,7 +4,7 @@ import * as os from 'os';
 import type { OntofeliaConfig } from '@ontofelia/config';
 import type { Logger } from 'pino';
 import { PRIMARY_AGENT_ID } from '@ontofelia/core';
-import { seedDefaultsForFreshInstall } from '@ontofelia/agent-runtime';
+import { seedDefaultsForFreshInstall, freshInstallSeededMessage } from '@ontofelia/agent-runtime';
 import {
   FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter,
   OntologyManager, ConflictDetector, ReflectionRunner, KnowledgeEngine,
@@ -89,7 +89,7 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
       const fresh = seeded.includes(GraphUriResolver.getSelfGraph(PRIMARY_AGENT_ID));
       const r = await seedDefaultsForFreshInstall(triplestore, PRIMARY_AGENT_ID, fresh);
       if (r.seeded) {
-        logger.info(`Cognitive layer defaults written for a new install (${r.flags.length} flags on; retention and initiative stay off)`);
+        logger.info(freshInstallSeededMessage(r.flags.length));
       }
     } catch (e) {
       logger.warn('Could not write the cognitive layer defaults: ' + (e as Error).message);
@@ -101,8 +101,15 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
   // Ontology & Reasoning
   const ontologyBasePath = path.join(os.homedir(), '.ontofelia', 'ontology', 'agents', PRIMARY_AGENT_ID);
   const coreOntologyPath = path.resolve(currentDir, '..', '..', '..', 'packages', 'semantic-memory', 'dist', 'ontologies', 'ontofelia-core.ttl');
-  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath);
+  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath, triplestore);
   await ontologyManager.initialize(coreOntologyPath);
+  // Load the approved ontology version, so it survives a restart.
+  try {
+    await ontologyManager.syncActiveToStore();
+    logger.info('Active ontology version loaded into ' + GraphUriResolver.getOntologyGraph(PRIMARY_AGENT_ID));
+  } catch (e) {
+    logger.warn('Could not load the active ontology version: ' + (e as Error).message);
+  }
 
   const conflictDetector = new ConflictDetector(triplestore);
   const reflectionRunner = new ReflectionRunner(triplestore, conflictDetector, ontologyManager);
