@@ -169,6 +169,8 @@ These override config file values at load time:
 | `OPENAI_API_KEY` | OpenAI API key (used when `provider.apiKey` is unset) |
 | `OPENROUTER_API_KEY` | OpenRouter API key (used when `provider.apiKey` is unset) |
 
+`ONTOFELIA_AGENT_DEBUG=1` prints the agent's per-turn debug events (`[AgentDebug] …`) to stdout. They contain chat content and raw tool arguments, so leave it unset outside local debugging; without it nothing is printed.
+
 The config directory itself is always `~/.ontofelia` (derived from the home directory of the user running the gateway).
 
 ## Provider Configuration Examples
