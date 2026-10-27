@@ -56,7 +56,11 @@ export class TelegramAdapter extends BaseChannelAdapter {
    * path without a bot connection.
    */
   async handleMessage(msg: TelegramBot.Message): Promise<void> {
-    console.log('Incoming Telegram msg:', JSON.stringify(msg, null, 2));
+    // The raw update carries the message text, names and ids, so it reaches
+    // stdout (and with it the service journal) only on explicit request.
+    if (process.env.ONTOFELIA_AGENT_DEBUG === '1') {
+      console.log('Incoming Telegram msg:', JSON.stringify(msg, null, 2));
+    }
     if (!msg.from) return;
     
     // Extract text: prefer msg.text, fall back to msg.caption for photos/documents
