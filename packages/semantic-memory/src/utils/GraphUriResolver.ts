@@ -84,6 +84,16 @@ export class GraphUriResolver {
   }
 
   /**
+   * The agent's approved ontology version (see `OntologyManager`). Holds
+   * exactly the content of the active version, replaced wholesale on
+   * approval and rollback, so it must not share a graph with the schema
+   * graph, which is appended to at runtime. Read like the shared TBox.
+   */
+  static getOntologyGraph(agentId: string): string {
+    return `urn:${agentId}:ontology`;
+  }
+
+  /**
    * Detected contradictions.
    */
   static getConflictsGraph(agentId: string): string {

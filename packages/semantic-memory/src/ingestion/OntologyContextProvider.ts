@@ -13,9 +13,10 @@ import type { OntologyContext } from './SemanticParser.js';
 
 /**
  * The TBox per knowledge-graph-concept §2 lives in `urn:shared:ontology`
- * (admin-only). Predicates the agent has learned at runtime are kept
- * separately in `urn:<agent>:schema`. The parser prompt must see BOTH so it
- * can reuse existing terms instead of inventing fresh, near-duplicate URIs.
+ * (admin-only); the agent's approved ontology version is mirrored into
+ * `urn:<agent>:ontology`. Predicates the agent has learned at runtime are kept
+ * separately in `urn:<agent>:schema`. The parser prompt must see ALL of them so
+ * it can reuse existing terms instead of inventing fresh, near-duplicate URIs.
  *
  * Historic note: this used to point at `urn:ontofelia:tbox`, which is not a
  * registered graph in the topology — the lookup silently returned empty and
@@ -61,14 +62,22 @@ export class OntologyContextProvider {
   }
 
   /**
-   * Load all OWL classes from the shared TBox.
+   * The TBox graphs: the shared ontology and the agent's approved ontology.
+   */
+  private tboxValues(): string {
+    return `VALUES ?tg { <${SHARED_TBOX}> <${GraphUriResolver.getOntologyGraph(this.agentId)}> }`;
+  }
+
+  /**
+   * Load all OWL classes from the TBox graphs.
    */
   private async loadClasses(): Promise<string[]> {
     const query = `
       PREFIX owl: <http://www.w3.org/2002/07/owl#>
       PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT DISTINCT ?label WHERE {
-        GRAPH <${SHARED_TBOX}> {
+        ${this.tboxValues()}
+        GRAPH ?tg {
           ?class a owl:Class .
           ?class rdfs:label ?label .
           # Claim-model bookkeeping terms are not entity types for the parser.
@@ -97,8 +106,9 @@ export class OntologyContextProvider {
    * Load all properties known to the agent.
    *
    * Two sources are unioned:
-   *   1. `urn:shared:ontology` — TBox owl:ObjectProperty / owl:DatatypeProperty
-   *      with their domain/range (the rich, admin-curated definitions).
+   *   1. `urn:shared:ontology` and `urn:<agent>:ontology` — TBox
+   *      owl:ObjectProperty / owl:DatatypeProperty with their domain/range
+   *      (the rich, admin-curated definitions).
    *   2. `urn:<agent>:schema` — runtime-learned rdf:Property entries (no
    *      domain/range yet) registered when the parser emitted a brand-new
    *      predicate. Including them prevents the parser from re-inventing the
@@ -112,7 +122,8 @@ export class OntologyContextProvider {
       PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT DISTINCT ?prop ?label ?domain ?range WHERE {
         {
-          GRAPH <${SHARED_TBOX}> {
+          ${this.tboxValues()}
+          GRAPH ?tg {
             { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
             # Claim-model bookkeeping terms are not facts the parser may emit.
             FILTER(!STRSTARTS(STR(?prop), "urn:shared:ontology#"))

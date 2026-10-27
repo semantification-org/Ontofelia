@@ -40,6 +40,7 @@ const REFUSED: Array<[string, string]> = [
   ['shared claims', SHARED_GRAPHS.CLAIMS],
   ['shared evidence', SHARED_GRAPHS.EVIDENCE],
   ['setup', R.getSetupGraph(AGENT)],
+  ['approved ontology', R.getOntologyGraph(AGENT)],
   ['cog episodic', R.getCogEpisodicGraph(AGENT)],
   ['cog procedural', R.getCogProceduralGraph(AGENT)],
   ['cog meta', R.getCogMetaGraph(AGENT)],

@@ -101,8 +101,15 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
   // Ontology & Reasoning
   const ontologyBasePath = path.join(os.homedir(), '.ontofelia', 'ontology', 'agents', PRIMARY_AGENT_ID);
   const coreOntologyPath = path.resolve(currentDir, '..', '..', '..', 'packages', 'semantic-memory', 'dist', 'ontologies', 'ontofelia-core.ttl');
-  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath);
+  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath, triplestore);
   await ontologyManager.initialize(coreOntologyPath);
+  // Load the approved ontology version, so it survives a restart.
+  try {
+    await ontologyManager.syncActiveToStore();
+    logger.info('Active ontology version loaded into ' + GraphUriResolver.getOntologyGraph(PRIMARY_AGENT_ID));
+  } catch (e) {
+    logger.warn('Could not load the active ontology version: ' + (e as Error).message);
+  }
 
   const conflictDetector = new ConflictDetector(triplestore);
   const reflectionRunner = new ReflectionRunner(triplestore, conflictDetector, ontologyManager);

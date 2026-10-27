@@ -312,11 +312,11 @@ List ontology versions / evolution proposals.
 
 #### `POST /api/ontology/proposals/:id/approve` / `POST /api/ontology/proposals/:id/reject`
 
-Approve or reject an ontology proposal.
+Approve or reject an ontology proposal. Approving creates a new version and makes it the active one: its content is loaded into the agent's ontology graph `urn:<agent>:ontology`, replacing the previous version there. The engine's functional-property check, label lookup and the parser context read it together with `urn:shared:ontology`.
 
 #### `POST /api/ontology/rollback`
 
-Roll back to a version: `{ "version": "v001" }`
+Roll back to a version: `{ "version": "v001" }`. The ontology graph is replaced by that version's content (`v000`, the initial core ontology, leaves it empty), so nothing of a later version stays visible. The gateway loads the active version again on every start.
 
 #### `GET /api/reasoning/conflicts`
 
