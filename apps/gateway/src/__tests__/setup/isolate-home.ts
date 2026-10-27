@@ -5,13 +5,20 @@
 // runs them. This file switches HOME to a fresh temporary directory before
 // any test module (and therefore any of that import-time code) runs, and
 // cleans it up again afterwards.
+//
+// The directory lives inside a per-run root created by ./global-isolate-home.ts,
+// which removes the whole root when the run ends. The afterAll below only
+// frees the space early and restores the environment; it is not the only
+// cleanup, because it never runs for a test file that fails to load.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll } from 'vitest';
+import { afterAll, inject } from 'vitest';
 
 // tmpdir() reads TMPDIR, not HOME, so this is unaffected by the switch below.
-const dir = mkdtempSync(join(tmpdir(), 'ontofelia-gateway-home-'));
+// Without the global setup (a config that omits it) fall back to the plain
+// temp directory; the afterAll hook is then the only cleanup.
+const dir = mkdtempSync(join(inject('isolatedHomeRoot') ?? tmpdir(), 'ontofelia-gateway-home-'));
 
 const previousHome = process.env.HOME;
 const previousUserProfile = process.env.USERPROFILE;
