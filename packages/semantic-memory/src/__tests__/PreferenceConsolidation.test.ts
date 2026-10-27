@@ -3,7 +3,7 @@ import { rm, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine, userEntityUri } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { EpisodicMemory } from '../cognitive/EpisodicMemory.js';
@@ -44,7 +44,7 @@ describe('preference consolidation', { timeout: 60_000 }, () => {
 
   beforeEach(async () => {
     dir = `/tmp/pref-consol-test-${Math.random().toString(16).slice(2)}`;
-    store = new OxigraphAdapter();
+    store = createOxigraphTestAdapter();
     await store.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: dir, port: 0, endpoint: '' });
     engine = new KnowledgeEngine(store, undefined, GraphRegistry.create([AGENT]));
     em = new EpisodicMemory(store, AGENT);

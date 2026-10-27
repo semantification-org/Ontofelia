@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { mapVaultNote } from '../ingestion/VaultNoteMapper.js';
 import type { FactInput } from '../types.js';
@@ -20,7 +20,7 @@ const EVIDENCE = `urn:${AGENT}:evidence`;
 const WORLDVIEW = `urn:${AGENT}:worldview`;
 const ctx = { agentId: AGENT, userId: 'alice', sessionId: 's', isOwner: false };
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 let engine: KnowledgeEngine;
 
 async function rows(sparql: string): Promise<Array<Record<string, { value: string }>>> {
@@ -35,7 +35,7 @@ const fact = (predicate: string, object: string, extra: Partial<FactInput> = {})
 });
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'preview-')), port: 0, endpoint: '' } as never);
   engine = new KnowledgeEngine(store as never);

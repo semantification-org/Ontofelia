@@ -482,6 +482,11 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
   fastify.addHook('onClose', async () => {
     sessionStore.close();
     scheduler.stop();
+    try {
+      await triplestore.stop();
+    } catch (e) {
+      logger.warn('Could not stop the triplestore cleanly: ' + (e as Error).message);
+    }
     if (fusekiWatchdog) fusekiWatchdog.stop();
     if (fusekiManager) await fusekiManager.stop();
     await channelRegistry.disconnectAll();

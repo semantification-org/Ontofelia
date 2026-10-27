@@ -3,7 +3,7 @@ import type { TriplestoreAdapter } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { SelfModel, type DerivedSelfSources } from '../cognitive/SelfModel.js';
@@ -32,7 +32,7 @@ const SOURCES: DerivedSelfSources = {
 };
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph', type: 'embedded',
     dataDir: `/tmp/self-derived-${process.pid}-${Math.random().toString(16).slice(2)}`, port: 0, endpoint: '',

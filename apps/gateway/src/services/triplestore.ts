@@ -6,7 +6,7 @@ import type { Logger } from 'pino';
 import { PRIMARY_AGENT_ID } from '@ontofelia/core';
 import { seedDefaultsForFreshInstall, freshInstallSeededMessage } from '@ontofelia/agent-runtime';
 import {
-  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter,
+  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter, OxigraphDiskAdapter,
   OntologyManager, ConflictDetector, ReflectionRunner, KnowledgeEngine,
   FusekiWatchdog, GraphRegistry, GraphUriResolver
 } from '@ontofelia/semantic-memory';
@@ -43,12 +43,35 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
     }, logger);
     fusekiWatchdog.start();
   } else if (config.memory.backend === 'oxigraph') {
-    const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
-    triplestore = new OxigraphAdapter();
-    await triplestore.initialize({
-      backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
-    });
-    logger.info('Started Oxigraph Triplestore in embedded mode.');
+    if (config.memory.oxigraphStore === 'disk') {
+      // Separate directory from the file adapter. An install that switches over
+      // has its dataset.nq imported once, below, while the store is still empty;
+      // the file is kept as a way back.
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph-disk');
+      triplestore = new OxigraphDiskAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      const fileDataset = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph', 'dataset.nq');
+      try {
+        // Must run before anything is written (the core ontology below), or the store is no longer empty.
+        const imp = await triplestore.importFileDataset(fileDataset);
+        if (imp.imported) {
+          logger.info(`Imported ${imp.quads} quads from the file store (${fileDataset}) into the on-disk store; the file is kept.`);
+        }
+      } catch (e) {
+        logger.error(`Could not import the file store into the on-disk store: ${(e as Error).message}`);
+        throw e;
+      }
+      logger.info('Started Oxigraph Triplestore in embedded mode (on-disk store).');
+    } else {
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
+      triplestore = new OxigraphAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      logger.info('Started Oxigraph Triplestore in embedded mode.');
+    }
   } else {
     triplestore = new InMemoryAdapter();
     await triplestore.initialize({

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { EpisodicMemory } from '../cognitive/EpisodicMemory.js';
 import { ProceduralMemory, type TraceInput } from '../cognitive/ProceduralMemory.js';
 import { GraphRegistry } from '../index.js';
@@ -12,15 +12,18 @@ import { GraphRegistry } from '../index.js';
 
 const AGENT = 'ontofelia';
 let dir: string;
+/** Adapters opened by a test; stopped before the directory goes (the on-disk store holds it open). */
+const opened: OxigraphTestAdapter[] = [];
 
-async function open(): Promise<OxigraphAdapter> {
-  const a = new OxigraphAdapter();
+async function open(): Promise<OxigraphTestAdapter> {
+  const a = createOxigraphTestAdapter();
+  opened.push(a);
   await a.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: dir, port: 0, endpoint: '' });
   return a;
 }
 
 /** The graph as a sorted list of quads with generated ids and timestamps blanked. */
-async function shape(a: OxigraphAdapter, graph: string): Promise<string[]> {
+async function shape(a: OxigraphTestAdapter, graph: string): Promise<string[]> {
   const res = await a.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
   const blank = (v: string) =>
     v
@@ -37,8 +40,9 @@ describe('batched writes', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'batched-writes-'));
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    for (const a of opened.splice(0)) await a.stop();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -63,8 +67,8 @@ describe('batched writes', () => {
     for (let i = 0; i < 3; i++) prev = await pmSeq.recordTrace({ ...trace(i), previousTrace: prev });
 
     const dir2 = mkdtempSync(join(tmpdir(), 'batched-writes-'));
+    const batch = createOxigraphTestAdapter();
     try {
-      const batch = new OxigraphAdapter();
       await batch.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: dir2, port: 0, endpoint: '' });
       const updates = vi.spyOn(batch, 'update');
       const pm = new ProceduralMemory(batch, AGENT, GraphRegistry.create([AGENT]));
@@ -78,6 +82,7 @@ describe('batched writes', () => {
       const pairs = (links.bindings ?? []).map((b) => `${b.t.value}>${b.p.value}`).sort();
       expect(pairs).toEqual([`${uris[1]}>${uris[0]}`, `${uris[2]}>${uris[1]}`].sort());
     } finally {
+      await batch.stop();
       rmSync(dir2, { recursive: true, force: true });
     }
   });

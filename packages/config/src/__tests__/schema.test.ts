@@ -8,6 +8,13 @@ describe('Config Schema', () => {
     expect(parsed.gateway.bind).toBe('loopback');
   });
 
+  it('memory.oxigraphStore defaults to file and accepts disk only besides file', () => {
+    expect(configSchema.parse({}).memory.oxigraphStore).toBe('file');
+    expect(configSchema.parse({ memory: { backend: 'oxigraph' } }).memory.oxigraphStore).toBe('file');
+    expect(configSchema.parse({ memory: { oxigraphStore: 'disk' } }).memory.oxigraphStore).toBe('disk');
+    expect(() => configSchema.parse({ memory: { oxigraphStore: 'rocks' } })).toThrow();
+  });
+
   it('validates missing token (defaults to empty string)', () => {
     const parsed = configSchema.parse({ gateway: { port: 8080 } });
     expect(parsed.gateway.token).toBe('');

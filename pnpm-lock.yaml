@@ -330,6 +330,21 @@ importers:
         specifier: ^3.2.6
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.12.4)(lightningcss@1.33.0)(tsx@4.22.0)
 
+  packages/disk-store:
+    devDependencies:
+      '@napi-rs/cli':
+        specifier: ^2.18.4
+        version: 2.18.4
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      oxigraph:
+        specifier: ^0.5.8
+        version: 0.5.8
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.19)(lightningcss@1.33.0)(tsx@4.22.0)
+
   packages/eval:
     dependencies:
       '@ontofelia/core':
@@ -502,6 +517,9 @@ importers:
       '@ontofelia/core':
         specifier: workspace:*
         version: link:../core
+      '@ontofelia/disk-store':
+        specifier: workspace:*
+        version: link:../disk-store
       '@ontofelia/reasoner':
         specifier: link:../reasoner
         version: link:../reasoner

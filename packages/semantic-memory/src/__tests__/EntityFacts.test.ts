@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { EpisodicMemory } from '../cognitive/EpisodicMemory.js';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
@@ -18,7 +18,7 @@ const userG = (u: string) => GraphUriResolver.getUserGraph(AGENT, u);
 const worldG = GraphUriResolver.getWorldviewGraph(AGENT);
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph', type: 'embedded', dataDir: `/tmp/entity-facts-${Math.random().toString(16).slice(2)}`, port: 0, endpoint: '',
   });
