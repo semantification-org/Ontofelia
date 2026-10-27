@@ -10,6 +10,7 @@ import * as os from 'os';
 import { sparqlIri } from '../utils/SparqlSyntax.js';
 import { sparqlTripleLine } from '../utils/TripleSyntax.js';
 import { convertOxigraphResult } from './oxigraphResult.js';
+import { QueryTimeoutError } from './QueryTimeoutError.js';
 
 const NQUADS_MIME = 'application/n-quads';
 const NTRIPLES_MIME = 'application/n-triples';
@@ -17,6 +18,9 @@ const NTRIPLES_MIME = 'application/n-triples';
 const NATIVE_STORE_UNAVAILABLE =
   'The native on-disk store is not available. Build it with: ' +
   'ONTOFELIA_BUILD_DISK_STORE=1 pnpm --filter @ontofelia/disk-store build';
+
+/** Prefix of the error the native store rejects with when a query hits its deadline. */
+const NATIVE_QUERY_TIMEOUT = 'QUERY_TIMEOUT';
 
 type DiskStoreModule = { DiskStore: typeof DiskStore };
 let diskStoreModule: DiskStoreModule | undefined;
@@ -130,9 +134,12 @@ function tripleMime(format: RdfFormat): string {
  * leaves the file untouched, so it stays as a way back. `backup()` writes the
  * same N-Quads file format as the file adapter, so backups are interchangeable.
  *
- * It exposes no `dataFilePath` or `dumpCount`, so `createQueryExecutor` falls
- * back to the in-process executor for this adapter (no worker, no hard query
- * deadline). A worker for the on-disk store is a later step.
+ * `query()` runs on the calling thread and cannot be interrupted. Use
+ * `queryWithDeadline()` for a hard deadline: the native store evaluates the
+ * query on a thread-pool task and cancels it when the time is up, so the main
+ * thread stays free and a runaway query ends with a `QueryTimeoutError`.
+ * `createQueryExecutor` returns a `DiskQueryExecutor` for this adapter, which
+ * uses it.
  */
 export class OxigraphDiskAdapter implements TriplestoreAdapter {
   readonly backend = 'oxigraph';
@@ -210,6 +217,22 @@ export class OxigraphDiskAdapter implements TriplestoreAdapter {
       return convertDiskResult(text);
     } catch (e) {
       throw new Error(`SPARQL Query failed in Oxigraph: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Runs a read-only query off the main thread and cancels it after
+   * `deadlineMs`. Rejects with `QueryTimeoutError` on expiry; other failures
+   * are wrapped like in `query()`.
+   */
+  async queryWithDeadline(sparql: string, deadlineMs: number): Promise<SparqlResult> {
+    try {
+      const text = await this.requireStore().queryAsync(sparql, null, deadlineMs);
+      return convertDiskResult(text);
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message.startsWith(NATIVE_QUERY_TIMEOUT)) throw new QueryTimeoutError(deadlineMs);
+      throw new Error(`SPARQL Query failed in Oxigraph: ${message}`);
     }
   }
 

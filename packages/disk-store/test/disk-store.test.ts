@@ -369,6 +369,100 @@ describe.skipIf(!DiskStore)('DiskStore (native on-disk store)', () => {
     expect(nativeBindings(store.query('SELECT ?o WHERE { GRAPH <urn:test:g1> { <urn:after> <urn:p> ?o } }'))).toEqual(['o="ok"']);
   });
 
+  describe('queryAsync (query with a deadline)', () => {
+    // Three chained transitive closures over a 300-link chain: well over a minute
+    // of work, and it reads quads all the time, which is where evaluation checks
+    // for cancellation.
+    const NEXT = '<urn:test:next>';
+    const CLOSURES = `GRAPH <urn:test:big> { ?a ${NEXT}* ?b . ?b ${NEXT}* ?c . ?c ${NEXT}* ?d }`;
+    const RUNAWAY = `SELECT (COUNT(*) AS ?n) WHERE { ${CLOSURES} }`;
+    const TIMEOUT_MS = 200;
+
+    function chainGraph(): string {
+      const lines: string[] = [];
+      for (let i = 0; i < 300; i++) lines.push(`<urn:test:c${i}> ${NEXT} <urn:test:c${i + 1}> .`);
+      return lines.join('\n') + '\n';
+    }
+
+    it('returns the same text as query() for SELECT, ASK and CONSTRUCT', async () => {
+      const store = track(Store.open(path));
+      store.load(dataset, NQ);
+      const queries = [
+        'SELECT ?g ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } }',
+        'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }',
+        `ASK { GRAPH <${G2}> { <urn:test:s1-0> <urn:test:age> 20 } }`,
+        'ASK { GRAPH <urn:test:g2> { <urn:test:s1-0> <urn:test:age> "nope" } }',
+        'CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ?g { ?s ?p ?o } }',
+        'DESCRIBE <urn:test:d0>',
+      ];
+      for (const q of queries) {
+        const sync = store.query(q);
+        expect(sync.length, q).toBeGreaterThan(0);
+        expect(await store.queryAsync(q, null, 5000), q).toBe(sync);
+      }
+      // defaultGraph restriction behaves the same too
+      const q = 'SELECT ?s ?p ?o WHERE { ?s ?p ?o }';
+      expect(await store.queryAsync(q, G1, 5000)).toBe(store.query(q, G1));
+    });
+
+    it('rejects with QUERY_TIMEOUT without blocking the event loop, and the store stays usable', async () => {
+      const store = track(Store.open(path));
+      store.load(chainGraph(), NT, 'urn:test:big');
+      store.load(dataset, NQ);
+      const before = store.len();
+
+      let ticks = 0;
+      const timer = setInterval(() => {
+        ticks++;
+      }, 10);
+      const started = Date.now();
+      let error: Error | undefined;
+      try {
+        await store.queryAsync(RUNAWAY, null, TIMEOUT_MS);
+      } catch (e) {
+        error = e as Error;
+      } finally {
+        clearInterval(timer);
+      }
+      const elapsed = Date.now() - started;
+
+      expect(error, 'the runaway query must reject').toBeInstanceOf(Error);
+      expect(error?.message).toMatch(/^QUERY_TIMEOUT/);
+      expect(elapsed).toBeGreaterThanOrEqual(TIMEOUT_MS - 20);
+      expect(elapsed).toBeLessThan(3000);
+      // the JS thread kept running while the query was evaluated
+      expect(ticks).toBeGreaterThan(5);
+
+      // a normal query and a write still work
+      expect(nativeBindings(await store.queryAsync('SELECT ?o WHERE { GRAPH <urn:test:g1> { <urn:test:w0> <urn:test:text0> ?o } }', null, 5000))).toHaveLength(1);
+      store.update('INSERT DATA { GRAPH <urn:test:g1> { <urn:after> <urn:p> "ok" } }');
+      expect(store.len()).toBe(before + 1);
+    });
+
+    it('rejects a runaway CONSTRUCT while its triples are being produced', async () => {
+      const store = track(Store.open(path));
+      store.load(chainGraph(), NT, 'urn:test:big');
+      const q = `CONSTRUCT { ?a <urn:test:x> ?d } WHERE { ${CLOSURES} }`;
+      const started = Date.now();
+      await expect(store.queryAsync(q, null, TIMEOUT_MS)).rejects.toThrow(/^QUERY_TIMEOUT/);
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+
+    it('reports other failures as ordinary errors and validates its arguments', async () => {
+      const store = track(Store.open(path));
+      store.load(dataset, NQ);
+      await expect(store.queryAsync('SELEKT * WHERE {', null, 1000)).rejects.toThrow(/.+/);
+      await expect(store.queryAsync('SELECT * WHERE { ?s ?p ?o }', 'not an iri', 1000)).rejects.toThrow(/invalid graph IRI/);
+      for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        await expect(store.queryAsync('SELECT * WHERE { ?s ?p ?o }', null, bad), String(bad)).rejects.toThrow(/timeoutMs/);
+      }
+      // none of the above is reported as a timeout
+      await expect(store.queryAsync('SELEKT * WHERE {', null, 1000)).rejects.not.toThrow(/QUERY_TIMEOUT/);
+      store.close();
+      await expect(store.queryAsync('SELECT * WHERE { ?s ?p ?o }', null, 1000)).rejects.toThrow(/closed/);
+    });
+  });
+
   it('close() releases the lock and later calls throw', () => {
     const first = Store.open(path);
     first.load(dataset, NQ);

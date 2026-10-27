@@ -20,9 +20,23 @@ export declare class DiskStore {
   /**
    * Runs a SPARQL query. SELECT/ASK return application/sparql-results+json text,
    * CONSTRUCT/DESCRIBE return application/n-triples text. When `defaultGraph`
-   * is given, it alone is the query's default graph.
+   * is given, it alone is the query's default graph. Blocks the calling thread
+   * until the query is done; use `queryAsync` when a deadline is needed.
    */
   query(sparql: string, defaultGraph?: string | undefined | null): string
+  /**
+   * Like `query`, but runs on the libuv thread pool (the JS thread stays free)
+   * and is cancelled after `timeoutMs` milliseconds. The deadline covers
+   * evaluation, iterating and serialising the results. On expiry the promise
+   * rejects with an error whose message starts with `QUERY_TIMEOUT`.
+   *
+   * Cancellation is noticed whenever evaluation reads the next quad, so a query
+   * that keeps scanning (property paths, joins that look data up) stops within
+   * milliseconds. A phase that only combines already buffered intermediate
+   * results, such as an unconstrained cross product of independent patterns, is
+   * not interrupted until evaluation touches the data again.
+   */
+  queryAsync(sparql: string, defaultGraph: string | undefined | null, timeoutMs: number): Promise<string>
   /** Runs a SPARQL update. */
   update(sparql: string): void
   /** Number of quads in the store. */

@@ -7,6 +7,7 @@ import type { SparqlResult, TriplestoreConfig } from '@ontofelia/core';
 import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
 import { OxigraphDiskAdapter } from '../adapters/OxigraphDiskAdapter.js';
 import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
+import { DiskQueryExecutor, InProcessQueryExecutor, QueryTimeoutError, createQueryExecutor } from '../adapters/QueryExecutor.js';
 
 const diskRequested = process.env.ONTOFELIA_TEST_OXIGRAPH_STORE === 'disk';
 
@@ -388,6 +389,67 @@ suite('OxigraphDiskAdapter', () => {
       const f = writeNq(NQ);
       await a.importFileDataset(f);
       expect(readFileSync(f, 'utf-8')).toBe(NQ);
+    });
+  });
+
+  describe('query deadline', () => {
+    const DEADLINE_MS = 200;
+    // Three chained transitive closures over a 300-link chain: over a minute of
+    // work without cancellation, and it reads quads all the time, which is where
+    // evaluation checks for cancellation.
+    const RUNAWAY =
+      `SELECT (COUNT(*) AS ?n) WHERE { GRAPH <${G1}> { ?a <urn:p:n>* ?b . ?b <urn:p:n>* ?c . ?c <urn:p:n>* ?d } }`;
+
+    it('createQueryExecutor picks the DiskQueryExecutor for this adapter only', async () => {
+      const disk = await openDisk(tmp());
+      const executor = createQueryExecutor(disk);
+      expect(executor).toBeInstanceOf(DiskQueryExecutor);
+      expect(executor).not.toBeInstanceOf(InProcessQueryExecutor);
+      await executor.close();
+      await executor.close(); // safe to call more than once
+    });
+
+    it('cancels a runaway query with QueryTimeoutError and keeps serving', async () => {
+      const a = await openDisk(tmp());
+      await a.insertTriples(G1, Array.from({ length: 300 }, (_, i) => ({
+        subject: `urn:s:${i}`, predicate: 'urn:p:n', object: `urn:s:${i + 1}`,
+      })));
+      const executor = createQueryExecutor(a);
+
+      const started = Date.now();
+      const failure = await executor.execute(RUNAWAY, DEADLINE_MS).then(() => undefined, (e: unknown) => e);
+      const elapsed = Date.now() - started;
+      expect(failure).toBeInstanceOf(QueryTimeoutError);
+      expect((failure as QueryTimeoutError).deadlineMs).toBe(DEADLINE_MS);
+      expect(elapsed).toBeLessThan(3000);
+
+      const ok = await executor.execute(`SELECT ?o WHERE { GRAPH <${G1}> { <urn:s:7> <urn:p:n> ?o } }`, 5000);
+      expect(ok.type).toBe('bindings');
+      expect(ok.bindings).toHaveLength(1);
+      expect(ok.bindings![0].o.value).toBe('urn:s:8');
+
+      // writes still go through, and the adapter's own query() is unchanged
+      await a.insertTriples(G1, [{ subject: 'urn:s:new', predicate: 'urn:p:n', object: 'urn:o:new' }]);
+      expect(await a.ask(`ASK { GRAPH <${G1}> { <urn:s:new> <urn:p:n> <urn:o:new> } }`)).toBe(true);
+    });
+
+    it('wraps other failures like query() does', async () => {
+      const a = await openDisk(tmp());
+      const error = await a.queryWithDeadline('SELEKT nonsense', 1000).then(() => undefined, (e: unknown) => e);
+      expect(error).not.toBeInstanceOf(QueryTimeoutError);
+      expect((error as Error).message).toMatch(/^SPARQL Query failed in Oxigraph:/);
+    });
+
+    it('returns the same result as query() when the deadline is not hit', async () => {
+      const a = await openDisk(tmp());
+      await a.importDataset(DATA, 'ntriples', G1);
+      for (const q of [
+        `SELECT ?s ?p ?o WHERE { GRAPH <${G1}> { ?s ?p ?o } }`,
+        `ASK { GRAPH <${G1}> { <urn:s:a> <urn:p:name> "Alice" } }`,
+        `CONSTRUCT { ?s ?p ?o } WHERE { GRAPH <${G1}> { ?s ?p ?o } }`,
+      ]) {
+        expect(maskBlankLabels(await a.queryWithDeadline(q, 5000)), q).toEqual(maskBlankLabels(await a.query(q)));
+      }
     });
   });
 

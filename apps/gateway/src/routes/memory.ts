@@ -203,7 +203,9 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
    * runaway query yields 504 `{ "error": "Query exceeded the time limit of N ms" }`
    * and never blocks the event loop. The worker queries a replica of the
    * persisted dataset, reloaded whenever the data file changes; queries run one
-   * at a time and the deadline starts when evaluation starts. Other backends
+   * at a time and the deadline starts when evaluation starts. With the on-disk
+   * Oxigraph store the query runs on a native thread-pool task that the store
+   * cancels at the deadline (no replica, no queue). Other backends
    * run in process: no real timeout is possible there (Fuseki aborts its HTTP
    * request after 30 s).
    *
