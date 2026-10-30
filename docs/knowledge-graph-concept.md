@@ -313,6 +313,20 @@ GRAPH <urn:ontofelia:evidence> {
 }
 ```
 
+#### `urn:<agent>:ontology` – approved ontology version
+
+Ontology proposals (`ontology_propose`, `/api/ontology/proposals`) are versioned
+as Turtle files. Approving a proposal makes its version the active one, and the
+`OntologyManager` loads that version into `urn:<agent>:ontology`; a rollback
+loads the earlier version instead, and the gateway reloads the active version on
+every start. The graph is always replaced as a whole, which is why it is kept
+apart from `urn:<agent>:schema`, to which the parser appends predicates at
+runtime. The initial version `v000` is a copy of the core ontology that
+`urn:shared:ontology` already holds, so the graph is empty while it is active.
+The engine reads this graph next to `urn:shared:ontology`, so an approved
+`owl:FunctionalProperty` declaration takes effect for belief revision. The
+graph is not readable through the SPARQL endpoints.
+
 #### `urn:<agent>:schema` – agent-local schema extension
 
 Ontofelia follows a **truth-maintenance model**: a new fact is treated as true
@@ -415,6 +429,7 @@ urn:shared:evidence           evidence for public consensus facts
 ├── urn:ontofelia:evidence     evidence / source material
 ├── urn:ontofelia:worldview    individual world knowledge
 ├── urn:ontofelia:schema       agent-local predicate definitions
+├── urn:ontofelia:ontology     the agent's approved ontology version (mirror of the active version file)
 ├── urn:ontofelia:conflicts    detected contradictions
 ├── urn:ontofelia:session:*    conversation context (short-lived)
 │

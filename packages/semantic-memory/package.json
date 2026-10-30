@@ -17,10 +17,12 @@
     "build": "tsc",
     "postbuild": "node -e \"const fs = require('fs'); const path = require('path'); fs.mkdirSync('dist/ontologies', { recursive: true }); fs.readdirSync('src/ontologies').filter(f => f.endsWith('.ttl')).forEach(f => fs.copyFileSync(path.join('src/ontologies', f), path.join('dist/ontologies', f)))\"",
     "test": "vitest run",
+    "test:disk": "ONTOFELIA_TEST_OXIGRAPH_STORE=disk vitest run",
     "lint": "eslint src"
   },
   "dependencies": {
     "@ontofelia/core": "workspace:*",
+    "@ontofelia/disk-store": "workspace:*",
     "@ontofelia/reasoner": "link:../reasoner",
     "js-yaml": "^4.1.1",
     "oxigraph": "^0.5.8",

@@ -3,7 +3,7 @@ import type { TriplestoreAdapter } from '@ontofelia/core';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine, ReseedInvariantError } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { SelfModel } from '../cognitive/SelfModel.js';
@@ -42,7 +42,7 @@ onto:Ontofelia onto:capability  "RDF Knowledge Graph" .
 `;
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

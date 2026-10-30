@@ -4,7 +4,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { SelfModel } from '../cognitive/SelfModel.js';
@@ -43,7 +43,7 @@ onto:Ontofelia onto:greetingTemplate "Hello, I am the old persona." .
 `;
 
 async function makeStore(dataDir: string): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import { ProceduralMemory, type TraceInput } from '../cognitive/ProceduralMemory.js';
@@ -12,7 +12,7 @@ const T0 = Date.UTC(2026, 9, 14, 0, 0, 0);
 const at = (min: number) => new Date(T0 + min * 60_000);
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

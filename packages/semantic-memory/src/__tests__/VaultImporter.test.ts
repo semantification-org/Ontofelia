@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { importVault, type VaultImportReport } from '../ingestion/VaultImporter.js';
 
@@ -18,7 +18,7 @@ const CORE = 'urn:shared:ontology#';
 const OWL = 'http://www.w3.org/2002/07/owl#';
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'vault');
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 let engine: KnowledgeEngine;
 let root: string;
 
@@ -36,7 +36,7 @@ const HUMMUS = 'Recipes/hummus.md';
 const IMPORTED = [HUMMUS, 'Ingredients/Chickpeas.md', 'Vocabularies/Beginner.md'];
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'vimp-')), port: 0, endpoint: '' } as never);
   engine = new KnowledgeEngine(store as never);

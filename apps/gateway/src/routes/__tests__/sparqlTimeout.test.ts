@@ -5,7 +5,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import {
-  OxigraphAdapter, OxigraphQueryExecutor, QueryTimeoutError, createQueryExecutor, InProcessQueryExecutor,
+  OxigraphAdapter, OxigraphDiskAdapter, OxigraphQueryExecutor, QueryTimeoutError, createQueryExecutor,
+  InProcessQueryExecutor, DiskQueryExecutor,
 } from '@ontofelia/semantic-memory';
 import { InMemoryAdapter } from '@ontofelia/semantic-memory';
 import memoryRoutes from '../memory.js';
@@ -209,5 +210,100 @@ describe('OxigraphQueryExecutor', () => {
 
   it('uses the in-process executor for other backends', () => {
     expect(createQueryExecutor(new InMemoryAdapter())).toBeInstanceOf(InProcessQueryExecutor);
+  });
+});
+
+// The on-disk backend cancels the query inside the native store. Like the other
+// disk tests, this is skipped when the native binary was not built, unless the
+// disk run was requested explicitly (then a missing binary must fail).
+const diskRequested = process.env.ONTOFELIA_TEST_OXIGRAPH_STORE === 'disk';
+let diskAvailable = true;
+{
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparql-disk-probe-'));
+  try {
+    const probe = new OxigraphDiskAdapter();
+    await probe.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: probeDir, port: 0, endpoint: '' });
+    await probe.stop();
+  } catch {
+    diskAvailable = false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+}
+
+describe.skipIf(!diskAvailable && !diskRequested)('POST /api/knowledge/sparql on the on-disk store', () => {
+  // Three chained transitive closures over a 300-link chain run for over a minute
+  // uncancelled; the store checks for cancellation as it reads quads.
+  const NEXT = `<${EX}next>`;
+  const RUNAWAY = `SELECT (COUNT(*) AS ?n) WHERE { GRAPH <${GRAPH}> { ?a ${NEXT}* ?b . ?b ${NEXT}* ?c . ?c ${NEXT}* ?d } }`;
+  let app: FastifyInstance;
+  let store: OxigraphDiskAdapter;
+  let dataDir: string;
+
+  const post = (query: string) => app.inject({ method: 'POST', url: '/api/knowledge/sparql', payload: { query } });
+
+  beforeAll(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparql-timeout-disk-'));
+    store = new OxigraphDiskAdapter();
+    await store.initialize({ backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: '' });
+    await store.insertTriples(GRAPH, Array.from({ length: 300 }, (_, i) => ({
+      subject: `${EX}n/${i}`, predicate: `${EX}next`, object: `${EX}n/${i + 1}`,
+    })));
+    app = Fastify();
+    app.get('/ping', async () => ({ ok: true }));
+    await app.register(memoryRoutes, {
+      triplestore: store,
+      config: { memory: { sparqlTimeoutMs: DEADLINE_MS } },
+    } as unknown as GatewayContext);
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await store.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('uses the disk executor', () => {
+    expect(createQueryExecutor(store)).toBeInstanceOf(DiskQueryExecutor);
+  });
+
+  it('answers a normal SELECT with the usual shape', async () => {
+    const res = await post(CHEAP);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      type: 'bindings',
+      variables: ['o'],
+      bindings: [{ o: { type: 'uri', value: EX + 'n/1' } }],
+      truncated: false,
+    });
+  });
+
+  it('returns 504 at the deadline, keeps the event loop free, and recovers', async () => {
+    let maxGap = 0;
+    let last = Date.now();
+    const ticker = setInterval(() => {
+      const now = Date.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 10);
+
+    const started = Date.now();
+    const slow = post(RUNAWAY);
+    await new Promise((r) => setTimeout(r, 50));
+    const ping = await app.inject({ method: 'GET', url: '/ping' });
+    const res = await slow;
+    const elapsed = Date.now() - started;
+    clearInterval(ticker);
+
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: `Query exceeded the time limit of ${DEADLINE_MS} ms` });
+    expect(elapsed).toBeLessThan(3000);
+    expect(ping.statusCode).toBe(200);
+    expect(maxGap).toBeLessThan(150);
+
+    const after = await post(CHEAP);
+    expect(after.statusCode).toBe(200);
+    expect(after.json().bindings).toHaveLength(1);
   });
 });

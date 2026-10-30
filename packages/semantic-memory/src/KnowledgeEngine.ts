@@ -526,6 +526,7 @@ export class KnowledgeEngine {
   ): Promise<string | null> {
     const needle = this.escapeLiteral(name.trim().toLowerCase());
     const schemaGraph = GraphUriResolver.getSchemaGraph(agentId);
+    const tboxValues = this.graphValuesClause(this.tboxGraphsFor(agentId), '?tg');
     try {
       const res = await this.triplestore.query(`
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -533,7 +534,8 @@ export class KnowledgeEngine {
         PREFIX owl:  <http://www.w3.org/2002/07/owl#>
         SELECT ?p WHERE {
           {
-            GRAPH <${TBOX_GRAPH}> {
+            ${tboxValues}
+            GRAPH ?tg {
               ?p rdfs:label ?l .
               { ?p a owl:ObjectProperty } UNION
               { ?p a owl:DatatypeProperty } UNION
@@ -681,9 +683,17 @@ export class KnowledgeEngine {
   private labelGraphsFor(agentId: string, userId?: string): string[] {
     return [
       ...this.knowledgeGraphsFor(agentId, userId),
-      TBOX_GRAPH,
+      ...this.tboxGraphsFor(agentId),
       GraphUriResolver.getSchemaGraph(agentId),
     ];
+  }
+
+  /**
+   * The TBox graphs of an agent: the shared ontology and the agent's approved
+   * ontology version (`OntologyManager` keeps the latter in sync).
+   */
+  private tboxGraphsFor(agentId: string): string[] {
+    return [TBOX_GRAPH, GraphUriResolver.getOntologyGraph(agentId)];
   }
 
   /** Build a SPARQL `VALUES ?var { <g1> <g2> … }` clause over graph URIs. */
@@ -1584,7 +1594,7 @@ export class KnowledgeEngine {
    */
   private async isFunctionalProperty(predicateUri: string, agentId: string): Promise<boolean> {
     const valuesG = this.graphValuesClause(
-      [TBOX_GRAPH, GraphUriResolver.getSchemaGraph(agentId)],
+      [...this.tboxGraphsFor(agentId), GraphUriResolver.getSchemaGraph(agentId)],
       '?g',
     );
     try {

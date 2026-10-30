@@ -17,7 +17,7 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { importVault } from '../ingestion/VaultImporter.js';
 import { buildVaultExport, writeVaultExport } from '../export/VaultExporter.js';
@@ -32,8 +32,8 @@ const HOSTILE = 'Ho"stile\nlabel/../x>y';
 const tmpDirs: string[] = [];
 const freshTmp = (p: string): string => { const d = mkdtempSync(join(tmpdir(), p)); tmpDirs.push(d); return d; };
 
-async function newEngine(prefix: string): Promise<{ store: OxigraphAdapter; engine: KnowledgeEngine }> {
-  const store = new OxigraphAdapter();
+async function newEngine(prefix: string): Promise<{ store: OxigraphTestAdapter; engine: KnowledgeEngine }> {
+  const store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: freshTmp(prefix), port: 0, endpoint: '' } as never);
   return { store, engine: new KnowledgeEngine(store as never) };
 }
@@ -81,7 +81,7 @@ async function factSet(engine: KnowledgeEngine, stripLang: boolean): Promise<str
   }).sort();
 }
 
-let source: { store: OxigraphAdapter; engine: KnowledgeEngine };
+let source: { store: OxigraphTestAdapter; engine: KnowledgeEngine };
 let outDir: string;
 
 beforeAll(async () => {
@@ -125,7 +125,7 @@ const filesIn = (dir: string): string[] =>
 
 describe('writeVaultExport round trip', () => {
   let written: Awaited<ReturnType<typeof writeVaultExport>>;
-  let fresh: { store: OxigraphAdapter; engine: KnowledgeEngine };
+  let fresh: { store: OxigraphTestAdapter; engine: KnowledgeEngine };
 
   it('writes one .md per note, creating the folder', async () => {
     expect(existsSync(outDir)).toBe(false);

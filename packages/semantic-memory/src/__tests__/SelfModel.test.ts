@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { SelfModel } from '../cognitive/SelfModel.js';
 
 // SelfModel is a SPARQL projection over the self graph, so it runs against the
@@ -12,7 +12,7 @@ const WRITE_DOC = `${COGT}WriteConceptDoc`;
 const ANSWER = `${COGT}AnswerQuestion`;
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',
