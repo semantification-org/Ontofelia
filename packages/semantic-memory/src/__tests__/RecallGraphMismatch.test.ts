@@ -14,13 +14,13 @@
  * one user's private user-graph facts must not leak into another user's recall.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 
 const AGENT = 'ontofelia';
 
 async function makeEngine(): Promise<KnowledgeEngine> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

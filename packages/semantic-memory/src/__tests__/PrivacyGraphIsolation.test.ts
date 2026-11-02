@@ -36,7 +36,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { createServer } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { FusekiAdapter } from '../adapters/FusekiAdapter.js';
 import { FusekiManager } from '../fuseki/FusekiManager.js';
 import type { TriplestoreAdapter } from '@ontofelia/core';
@@ -70,7 +70,7 @@ const ABOX_TRIPLE = `
 // ── Helpers ───────────────────────────────────────────────────────────
 
 async function makeOxigraphStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

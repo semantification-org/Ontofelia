@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import type { FactInput } from '../types.js';
 
@@ -23,11 +23,11 @@ const ownerCtx = { agentId: AGENT, userId: 'boss', sessionId: 's-o', isOwner: tr
 type Kind = FactInput['sourceKind'];
 const KINDS: Kind[] = ['user', 'agent', 'tool', undefined];
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 let engine: KnowledgeEngine;
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'nonowner-routing-')), port: 0, endpoint: '',

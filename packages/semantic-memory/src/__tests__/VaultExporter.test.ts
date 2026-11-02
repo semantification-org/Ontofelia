@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { importVault } from '../ingestion/VaultImporter.js';
 import { mapVaultNote } from '../ingestion/VaultNoteMapper.js';
@@ -27,10 +27,10 @@ function leakedCanaries(report: { notes: { path: string; content: string }[] }):
 
 let report: VaultExportReport;
 let engine: KnowledgeEngine;
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 
 beforeAll(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'vexp-')), port: 0, endpoint: '' } as never);
   engine = new KnowledgeEngine(store as never);
@@ -138,7 +138,7 @@ describe('buildVaultExport provenance criterion', () => {
   const OWNER = { agentId: AGENT, sessionId: 'p', isOwner: true, userId: 'alice' };
 
   async function fresh(): Promise<{ eng: KnowledgeEngine }> {
-    const st = new OxigraphAdapter();
+    const st = createOxigraphTestAdapter();
     await st.initialize({ backend: 'oxigraph', type: 'embedded',
       dataDir: mkdtempSync(join(tmpdir(), 'vexp-prov-')), port: 0, endpoint: '' } as never);
     return { eng: new KnowledgeEngine(st as never) };

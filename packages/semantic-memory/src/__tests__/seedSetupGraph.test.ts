@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 
@@ -12,11 +12,11 @@ import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 describe('seedSetupGraph preserves cognitive flags', () => {
   const AGENT = 'ontofelia';
   let dataDir: string;
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
 
   beforeEach(async () => {
     dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'onto-setup-'));
-    store = new OxigraphAdapter();
+    store = createOxigraphTestAdapter();
     await store.initialize({ backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: '' });
   });
 

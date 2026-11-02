@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { EpisodicMemory } from '../cognitive/EpisodicMemory.js';
 
 // Per-user privacy of the episodic graph: every read takes a user scope, legacy
@@ -14,7 +14,7 @@ const COGT = 'urn:shared:ontology#cog/';
 const CORE = 'urn:shared:ontology#';
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

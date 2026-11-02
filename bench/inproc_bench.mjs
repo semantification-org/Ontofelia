@@ -18,12 +18,16 @@
  *                        The level also times the catch-up that rebuilds the inferred graphs.
  *                        Without the flag the gate is off, as in a default install.
  *
+ * Environment: BENCH_STORE=disk runs the levels on the on-disk store (OxigraphDiskAdapter);
+ * unset or `file` uses the file-backed OxigraphAdapter. With `disk`, `datasetMB` is the size
+ * of the store directory instead of dataset.nq.
+ *
  * `peakRssMB` is the process high-water mark: run one level per process
  * (e.g. under `systemd-run --user --scope -p MemoryMax=6G`) to read it per size.
  */
 
 import { performance } from 'node:perf_hooks';
-import { mkdirSync, rmSync, writeFileSync, statSync, appendFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, statSync, appendFileSync, readdirSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -31,10 +35,23 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 
 import {
-  OxigraphAdapter, KnowledgeEngine, GraphRegistry, GraphUriResolver, SHARED_GRAPHS, REASONING_NS, reasoningSettingsSubject,
+  OxigraphAdapter, OxigraphDiskAdapter, KnowledgeEngine, GraphRegistry, GraphUriResolver, SHARED_GRAPHS, REASONING_NS, reasoningSettingsSubject,
 } from '../packages/semantic-memory/dist/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const USE_DISK = process.env.BENCH_STORE === 'disk';
+if (process.env.BENCH_STORE && !['file', 'disk'].includes(process.env.BENCH_STORE)) {
+  console.error('BENCH_STORE must be "file" or "disk"'); process.exit(2);
+}
+
+function dirBytes(dir) {
+  let n = 0;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    n += e.isDirectory() ? dirBytes(p) : statSync(p).size;
+  }
+  return n;
+}
 
 const TBOX_PATH = path.resolve(
   __dirname, '..', 'packages', 'semantic-memory', 'dist', 'ontologies', 'ontofelia-core.ttl',
@@ -119,7 +136,7 @@ async function runOneLevel(facts, asyncThreshold) {
   const dataDir = path.join(tmp, 'triplestore');
   mkdirSync(dataDir, { recursive: true });
 
-  const triplestore = new OxigraphAdapter();
+  const triplestore = USE_DISK ? new OxigraphDiskAdapter() : new OxigraphAdapter();
   await triplestore.initialize({
     backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: '',
   });
@@ -161,7 +178,7 @@ async function runOneLevel(facts, asyncThreshold) {
   // Measure flush size now
   const datasetFile = path.join(dataDir, 'dataset.nq');
   let datasetBytes = 0;
-  try { datasetBytes = statSync(datasetFile).size; } catch {}
+  try { datasetBytes = USE_DISK ? dirBytes(dataDir) : statSync(datasetFile).size; } catch {}
 
   // Total triple count
   const totalRes = await triplestore.query(`SELECT (COUNT(*) AS ?c) WHERE { GRAPH ?g { ?s ?p ?o } }`);
@@ -249,6 +266,7 @@ async function runOneLevel(facts, asyncThreshold) {
 
   return {
     facts,
+    store: USE_DISK ? 'disk' : 'file',
     total,
     datasetMB: +(datasetBytes / 1024 / 1024).toFixed(1),
     genMs: Math.round(genMs),
@@ -276,7 +294,7 @@ const LEVELS = levelsArg
   ? levelsArg.split(',').map(n => Number.parseInt(n, 10))
   : [0, 1000, 5000, 15000, 30000, 60000];
 
-console.error('Levels:', LEVELS.join(', '), '| reasoning gate:', ASYNC_THRESHOLD > 0 ? `on (threshold ${ASYNC_THRESHOLD})` : 'off');
+console.error('Store:', USE_DISK ? 'disk' : 'file', '| Levels:', LEVELS.join(', '), '| reasoning gate:', ASYNC_THRESHOLD > 0 ? `on (threshold ${ASYNC_THRESHOLD})` : 'off');
 const results = [];
 for (const n of LEVELS) {
   console.error(`\n=== Facts: ${n} ===`);

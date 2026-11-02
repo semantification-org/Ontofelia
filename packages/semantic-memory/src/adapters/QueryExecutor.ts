@@ -2,14 +2,10 @@ import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import type { SparqlResult, TriplestoreAdapter } from '@ontofelia/core';
 import { OxigraphAdapter } from './OxigraphAdapter.js';
+import { OxigraphDiskAdapter } from './OxigraphDiskAdapter.js';
+import { QueryTimeoutError } from './QueryTimeoutError.js';
 
-/** Thrown when a query exceeds its deadline. */
-export class QueryTimeoutError extends Error {
-  constructor(readonly deadlineMs: number) {
-    super(`Query exceeded the time limit of ${deadlineMs} ms`);
-    this.name = 'QueryTimeoutError';
-  }
-}
+export { QueryTimeoutError };
 
 /** Runs read-only queries with a deadline. */
 export interface QueryExecutor {
@@ -22,13 +18,32 @@ export interface QueryExecutor {
  * Calls `triplestore.query` directly. No real timeout is possible: a
  * synchronous in-process query cannot be interrupted, so the deadline is only
  * enforced by backends that honour it themselves (Fuseki aborts its HTTP
- * request). Used for every backend other than Oxigraph.
+ * request). Used for every backend other than the two embedded Oxigraph ones.
  */
 export class InProcessQueryExecutor implements QueryExecutor {
   constructor(private readonly triplestore: TriplestoreAdapter) {}
 
   execute(query: string, _deadlineMs: number): Promise<SparqlResult> {
     return this.triplestore.query(query);
+  }
+
+  async close(): Promise<void> {}
+}
+
+/**
+ * Runs queries on the native on-disk store's own thread-pool task
+ * (`OxigraphDiskAdapter.queryWithDeadline`). The caller gets the timeout at the
+ * deadline; the native evaluation is cancelled, but it stops only when it next
+ * reads data, so a pure cross product can keep one thread-pool thread busy for
+ * a while afterwards. The main thread is never blocked and there is no worker
+ * or replica to manage. No queue: RocksDB reads are safe to run concurrently, and each query carries
+ * its own deadline from the moment it starts.
+ */
+export class DiskQueryExecutor implements QueryExecutor {
+  constructor(private readonly adapter: OxigraphDiskAdapter) {}
+
+  execute(query: string, deadlineMs: number): Promise<SparqlResult> {
+    return this.adapter.queryWithDeadline(query, deadlineMs);
   }
 
   async close(): Promise<void> {}
@@ -145,8 +160,15 @@ export class OxigraphQueryExecutor implements QueryExecutor {
   }
 }
 
-/** Picks the executor for a backend: a worker for Oxigraph, in-process otherwise. */
+/**
+ * Picks the executor for a backend: a worker for the Oxigraph file backend, the
+ * store's own cancellable query for the Oxigraph on-disk backend, in-process
+ * otherwise.
+ */
 export function createQueryExecutor(triplestore: TriplestoreAdapter): QueryExecutor {
+  if (triplestore instanceof OxigraphDiskAdapter) {
+    return new DiskQueryExecutor(triplestore);
+  }
   if (triplestore instanceof OxigraphAdapter) {
     return new OxigraphQueryExecutor(triplestore.dataFilePath);
   }

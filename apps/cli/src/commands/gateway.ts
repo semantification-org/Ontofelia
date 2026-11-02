@@ -15,6 +15,7 @@ import { loadConfig } from '@ontofelia/config';
 import { startGateway } from '@ontofelia/gateway';
 import { createLogger } from '@ontofelia/core';
 import { readPid, writePid, removePid, stopGateway } from '../utils/process.js';
+import { installShutdownHandlers } from '../utils/shutdown.js';
 
 const logger = createLogger('cli');
 
@@ -56,11 +57,11 @@ export function registerGatewayCommand(program: Command) {
           // Foreground mode (for debugging / development)
           await writePid(process.pid);
           
-          const cleanup = async () => { await removePid(); process.exit(0); };
-          process.on('SIGINT', cleanup);
-          process.on('SIGTERM', cleanup);
-          
-          await startGateway(config);
+          const shutdown = installShutdownHandlers({
+            removePid, exit: code => process.exit(code), on: (sig, h) => process.on(sig, h),
+            onError: msg => logger.warn(msg),
+          });
+          shutdown.setApp(await startGateway(config));
         } else {
           // Default: background (daemon) mode
           const logFile = path.join(os.homedir(), '.ontofelia', 'logs', 'gateway.log');
@@ -162,11 +163,11 @@ export function registerGatewayCommand(program: Command) {
         const config = await loadConfig();
         await writePid(process.pid);
         
-        const cleanup = async () => { await removePid(); process.exit(0); };
-        process.on('SIGINT', cleanup);
-        process.on('SIGTERM', cleanup);
-        
-        await startGateway(config);
+        const shutdown = installShutdownHandlers({
+          removePid, exit: code => process.exit(code), on: (sig, h) => process.on(sig, h),
+          onError: msg => logger.warn(msg),
+        });
+        shutdown.setApp(await startGateway(config));
       } catch (err: unknown) {
         await removePid();
         logger.error(`Failed to start gateway: ${(err as Error).message}`);

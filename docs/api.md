@@ -294,7 +294,7 @@ Run a read-only SPARQL query. Same bearer-token authentication as the other `/ap
 - Only graphs on a closed allowlist may be named, in `GRAPH`, `FROM` or `FROM NAMED`; anything else is rejected with `403`, as are `GRAPH ?var` patterns. The allowlist holds the graphs the agent shows to every user anyway: `urn:shared:ontology`, `urn:shared:meta`, `urn:shared:shapes`, `urn:shared:world` and, per agent, `urn:<agent>:worldview`, `schema`, `inferred`, `self` and `skills`.
 - Refused for every caller: the graphs that collect data derived from every user's messages (`claims`, `evidence`, `conflicts`, `setup`, `urn:shared:claims`, `urn:shared:evidence`, `cog:episodic`, `cog:procedural`, `cog:meta`, `cog:goals:*`, `cog:cycles:*`, `cog:working:*`) and all per-user, per-user-inferred and per-session graphs (`urn:<agent>:user:*`, `urn:<agent>:inferred:user:*`, `urn:<agent>:session:*`). The bearer token does not identify a user, so no caller gets more.
 - `SELECT` returns at most 1000 rows; `truncated` is `true` when more matched.
-- Queries have a deadline, `memory.sparqlTimeoutMs` (default `5000`, clamped to 100..60000 ms). A query that exceeds it is stopped and answered with `504` `{ "error": "Query exceeded the time limit of N ms" }`. With the embedded Oxigraph backend the query runs in a worker thread against a replica of the persisted dataset (reloaded when the data file changes), one query at a time, so a runaway query does not block the gateway; the deadline starts when evaluation starts, not while queued. Other backends run in process and cannot be interrupted (Fuseki aborts its request after 30 s).
+- Queries have a deadline, `memory.sparqlTimeoutMs` (default `5000`, clamped to 100..60000 ms). A query that exceeds it is stopped and answered with `504` `{ "error": "Query exceeded the time limit of N ms" }`. With the embedded Oxigraph backend the query runs in a worker thread against a replica of the persisted dataset (reloaded when the data file changes), one query at a time, so a runaway query does not block the gateway; the deadline starts when evaluation starts, not while queued. With the on-disk Oxigraph store (`memory.oxigraphStore: "disk"`) the query runs on a native thread-pool task, with no replica and no queue; reads run concurrently and each has its own deadline. The caller gets the `504` at the deadline; the native evaluation is cancelled too, but it stops only when it next reads data, so a pure cross product can keep one thread-pool thread busy for a while after the `504`. Other backends run in process and cannot be interrupted (Fuseki aborts its request after 30 s).
 
 Response for `SELECT`: `{ "type": "bindings", "variables": ["s"], "bindings": [{ "s": { "type": "uri", "value": "..." } }], "truncated": false }`. Response for `ASK`: `{ "type": "boolean", "boolean": true }`.
 
@@ -312,11 +312,11 @@ List ontology versions / evolution proposals.
 
 #### `POST /api/ontology/proposals/:id/approve` / `POST /api/ontology/proposals/:id/reject`
 
-Approve or reject an ontology proposal.
+Approve or reject an ontology proposal. Approving creates a new version and makes it the active one: its content is loaded into the agent's ontology graph `urn:<agent>:ontology`, replacing the previous version there. The engine's functional-property check, label lookup and the parser context read it together with `urn:shared:ontology`.
 
 #### `POST /api/ontology/rollback`
 
-Roll back to a version: `{ "version": "v001" }`
+Roll back to a version: `{ "version": "v001" }`. The ontology graph is replaced by that version's content (`v000`, the initial core ontology, leaves it empty), so nothing of a later version stays visible. The gateway loads the active version again on every start.
 
 #### `GET /api/reasoning/conflicts`
 

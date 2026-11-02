@@ -12,7 +12,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { TriplestoreAdapter } from '@ontofelia/core';
 import { inferTriples } from '@ontofelia/reasoner';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine, type EngineLogger } from '../KnowledgeEngine.js';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import {
@@ -41,7 +41,7 @@ const ownerCtx: FactContext = { agentId: AGENT, userId: 'owner', sessionId: 's',
 const bobCtx: FactContext = { agentId: AGENT, userId: 'bob', sessionId: 's', isOwner: false };
 
 interface Rig {
-  store: OxigraphAdapter;
+  store: OxigraphTestAdapter;
   engine: KnowledgeEngine;
   logger: EngineLogger & { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
   materialize: ReturnType<typeof vi.fn>;
@@ -49,7 +49,7 @@ interface Rig {
 
 /** A fresh store with the core TBox plus the custom hierarchy the tests infer over. */
 async function makeRig(): Promise<Rig> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'rg-')), port: 0, endpoint: '',
@@ -69,7 +69,7 @@ async function makeRig(): Promise<Rig> {
   return { store, engine, logger, materialize };
 }
 
-async function setThreshold(store: OxigraphAdapter, value: string | number | null): Promise<void> {
+async function setThreshold(store: OxigraphTestAdapter, value: string | number | null): Promise<void> {
   const subject = reasoningSettingsSubject(AGENT);
   await store.update(`DELETE WHERE { GRAPH <${SETUP}> { <${subject}> <${THRESHOLD}> ?v } }`);
   if (value !== null) {
@@ -77,12 +77,12 @@ async function setThreshold(store: OxigraphAdapter, value: string | number | nul
   }
 }
 
-async function graphRows(store: OxigraphAdapter, graph: string): Promise<string[]> {
+async function graphRows(store: OxigraphTestAdapter, graph: string): Promise<string[]> {
   const r = await store.query(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
   return (r.bindings ?? []).map(b => `${b.s.value} | ${b.p.value} | ${b.o.value}`).sort();
 }
 
-async function markerRows(store: OxigraphAdapter): Promise<string[]> {
+async function markerRows(store: OxigraphTestAdapter): Promise<string[]> {
   const r = await store.query(`SELECT ?v WHERE { GRAPH <${SETUP}> { ?s <${STALE}> ?v } }`);
   return (r.bindings ?? []).map(b => b.v.value);
 }

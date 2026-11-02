@@ -56,6 +56,7 @@ export type GraphRole =
   | 'evidence' // urn:<agent>:evidence
   | 'worldview' // urn:<agent>:worldview
   | 'schema' // urn:<agent>:schema — agent-local predicate definitions
+  | 'ontology' // urn:<agent>:ontology — the agent's approved ontology version
   | 'conflicts' // urn:<agent>:conflicts
   | 'inferred' // urn:<agent>:inferred — reasoner materialization target
   | 'inferred-user' // urn:<agent>:inferred:user:<userId> — parameterised, per-user reasoner target
@@ -149,6 +150,7 @@ export class GraphRegistry {
       [GraphUriResolver.getEvidenceGraph(agentId), 'evidence'],
       [GraphUriResolver.getWorldviewGraph(agentId), 'worldview'],
       [GraphUriResolver.getSchemaGraph(agentId), 'schema'],
+      [GraphUriResolver.getOntologyGraph(agentId), 'ontology'],
       [GraphUriResolver.getConflictsGraph(agentId), 'conflicts'],
       [GraphUriResolver.getInferredGraph(agentId), 'inferred'],
       // Cognitive architecture — fixed graphs.

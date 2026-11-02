@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { OntologyContextProvider } from '../ingestion/OntologyContextProvider.js';
 
@@ -23,7 +23,7 @@ const CONFLICTS = `urn:${AGENT}:conflicts`;
 const ctx = { agentId: AGENT, userId: 'alice', sessionId: 's', isOwner: false };
 const TTL = join(dirname(fileURLToPath(import.meta.url)), '..', 'ontologies', 'ontofelia-core.ttl');
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 let engine: KnowledgeEngine;
 
 async function rows(sparql: string): Promise<Array<Record<string, { value: string; datatype?: string }>>> {
@@ -44,7 +44,7 @@ async function claimFor(place: string): Promise<string> {
 }
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({ backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'superseded-by-')), port: 0, endpoint: '' } as never);
   engine = new KnowledgeEngine(store as never);

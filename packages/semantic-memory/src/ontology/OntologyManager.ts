@@ -1,6 +1,11 @@
 import * as fs from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import type { TriplestoreAdapter } from '@ontofelia/core';
+import { GraphUriResolver } from '../utils/GraphUriResolver.js';
+
+/** The initial version: a copy of the core ontology the shared TBox already holds. */
+const INITIAL_VERSION = 'v000';
 
 export interface OntologyVersion {
   version: string;          // Semver or timestamp
@@ -19,6 +24,14 @@ export interface OntologyProposal {
   status: 'pending' | 'approved' | 'rejected';
 }
 
+/**
+ * Versioned ontology files of one agent.
+ *
+ * With a triplestore, the active version is mirrored into the agent's
+ * ontology graph (`urn:<agent>:ontology`): approving a proposal or rolling
+ * back replaces that graph, and the gateway calls {@link syncActiveToStore}
+ * on start. Without a triplestore only the files change.
+ */
 export class OntologyManager {
   private versionsDir: string;
   private proposalsDir: string;
@@ -27,7 +40,8 @@ export class OntologyManager {
 
   constructor(
     private agentId: string,
-    private basePath: string   // ~/.ontofelia/ontology/agents/{agentId}/
+    private basePath: string,  // ~/.ontofelia/ontology/agents/{agentId}/
+    private triplestore?: TriplestoreAdapter
   ) {
     this.versionsDir = path.join(this.basePath, 'versions');
     this.proposalsDir = path.join(this.basePath, 'proposals');
@@ -59,6 +73,42 @@ export class OntologyManager {
         description: 'Initial Core Ontology',
         active: true
       }, null, 2));
+    }
+  }
+
+  /**
+   * Make the ontology graph hold exactly the active version. The graph is
+   * cleared first because `putGraph` appends on some backends. The initial
+   * version is a copy of the core ontology that the shared TBox already
+   * holds, so for it the graph stays empty.
+   */
+  async syncActiveToStore(): Promise<void> {
+    if (!this.triplestore) return;
+    const graph = GraphUriResolver.getOntologyGraph(this.agentId);
+    const active = await this.getActiveVersion();
+    const content = active.version === INITIAL_VERSION ? '' : await this.getVersionContent(active.version);
+    await this.triplestore.deleteGraph(graph);
+    if (content.trim().length > 0) {
+      await this.triplestore.putGraph(graph, content, 'turtle');
+    }
+  }
+
+  /**
+   * Point `active.json` at `next` and mirror it into the store. When the
+   * store rejects the content (e.g. invalid Turtle), the previous version is
+   * restored, so the files and the store never disagree about what is active.
+   */
+  private async activate(next: OntologyVersion): Promise<void> {
+    const previous = existsSync(this.activeFile) ? await this.getActiveVersion() : undefined;
+    await fs.writeFile(this.activeFile, JSON.stringify(next, null, 2));
+    try {
+      await this.syncActiveToStore();
+    } catch (e) {
+      if (previous) {
+        await fs.writeFile(this.activeFile, JSON.stringify(previous, null, 2));
+        await this.syncActiveToStore().catch(() => undefined);
+      }
+      throw e;
     }
   }
 
@@ -109,7 +159,7 @@ export class OntologyManager {
       active: true
     };
 
-    await fs.writeFile(this.activeFile, JSON.stringify(newVersion, null, 2));
+    await this.activate(newVersion);
     return newVersion;
   }
 
@@ -129,7 +179,7 @@ export class OntologyManager {
       active: true
     };
 
-    await fs.writeFile(this.activeFile, JSON.stringify(activeVersion, null, 2));
+    await this.activate(activeVersion);
     return activeVersion;
   }
 

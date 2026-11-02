@@ -12,7 +12,7 @@ export class OntologyProposeTool implements ToolDefinition {
     properties: {
       description: { type: 'string', description: 'Description of the change' },
       turtlePatch: { type: 'string', description: 'New Turtle content for the agent ontology' },
-      autoApprove: { type: 'boolean', description: 'Apply the proposal immediately if allowed', default: false }
+      autoApprove: { type: 'boolean', description: 'Apply the proposal immediately. Only the owner, present in a live conversation, can do this; for anyone else the proposal stays pending.', default: false }
     },
     required: ['description', 'turtlePatch']
   };
@@ -34,9 +34,13 @@ export class OntologyProposeTool implements ToolDefinition {
       status: 'pending'
     });
 
-    if (args.autoApprove) {
-      // In a real system, we'd check if the agent is allowed to auto-approve.
-      // For now, we just approve if requested.
+    // Approving changes the ontology the agent reads, so it takes the verified
+    // owner in a live conversation (the same gate as the owner-only goal
+    // tools). Any other caller leaves the proposal pending for the owner.
+    const mayAutoApprove =
+      context.isOwner === true && context.ownerPresent === true && context.unattended !== true;
+
+    if (args.autoApprove && mayAutoApprove) {
       await this.ontologyManager.approveProposal(proposalId);
       const msg = `Proposal ${proposalId} created and automatically approved.`;
       return {
@@ -54,7 +58,9 @@ export class OntologyProposeTool implements ToolDefinition {
       };
     }
 
-    const msg = `Proposal ${proposalId} created and is pending approval.`;
+    const msg = args.autoApprove
+      ? `Proposal ${proposalId} created and is pending approval: automatic approval is reserved for the owner in a live conversation.`
+      : `Proposal ${proposalId} created and is pending approval.`;
     return {
       success: true,
       output: msg,

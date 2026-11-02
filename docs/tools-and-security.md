@@ -20,7 +20,7 @@ Ontofelia provides a powerful tool system that lets the AI agent interact with t
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ontology_inspect` | View classes and properties in the TBox | "What types of things do you track?" |
-| `ontology_propose` | Propose ontology changes as Turtle patches | "Add an Employee class" |
+| `ontology_propose` | Propose ontology changes as Turtle patches; `autoApprove` applies the proposal at once, but only for the owner in a live conversation (otherwise it stays pending) | "Add an Employee class" |
 
 ### Utility Tools
 

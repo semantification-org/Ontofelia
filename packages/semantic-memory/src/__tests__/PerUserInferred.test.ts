@@ -10,7 +10,7 @@ import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Triple, TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { ReasonableEngine } from '../reasoning/ReasonableEngine.js';
 import { GraphUriResolver } from '../utils/GraphUriResolver.js';
@@ -26,11 +26,11 @@ const ALICE_INF = GraphUriResolver.getUserInferredGraph(AGENT, 'alice');
 const bobCtx = { agentId: AGENT, userId: 'bob', sessionId: 's', isOwner: false };
 const aliceCtx = { agentId: AGENT, userId: 'alice', sessionId: 's', isOwner: false };
 
-let store: OxigraphAdapter;
+let store: OxigraphTestAdapter;
 let engine: KnowledgeEngine;
 
 beforeEach(async () => {
-  store = new OxigraphAdapter();
+  store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph', type: 'embedded',
     dataDir: mkdtempSync(join(tmpdir(), 'pui-')), port: 0, endpoint: '',
