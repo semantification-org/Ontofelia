@@ -69,7 +69,8 @@ export class GraphCatalog {
         visibility: b.visibility?.value,
         comment: b.comment?.value,
       })).filter(e => e.uri.length > 0);
-    } catch {
+    } catch (e) {
+      console.warn('[GraphCatalog] describeAll query failed; returning empty catalog:', e instanceof Error ? e.message : String(e));
       return [];
     }
   }

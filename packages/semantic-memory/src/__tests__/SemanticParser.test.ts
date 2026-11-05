@@ -264,5 +264,70 @@ describe('SemanticParser', () => {
       expect(result.facts).toHaveLength(1);
       expect(result.facts[0].object).toBe('Berlin');
     });
+
+    it('records failure stats when the provider rejects with a bad model id', async () => {
+      const provider = {
+        name: 'mock',
+        initialize: vi.fn(),
+        healthCheck: vi.fn(),
+        chat: vi.fn().mockRejectedValue(new Error('400 new-model is not a valid model ID')),
+        chatStream: vi.fn(),
+      } as unknown as ProviderAdapter;
+
+      const parser = new SemanticParser(provider, { model: 'new-model' });
+
+      const result = await parser.parse('I live in Berlin', TEST_CONTEXT);
+
+      expect(result.facts).toEqual([]);
+
+      const stats = parser.getStats();
+      expect(stats.failures).toBe(1);
+      expect(stats.consecutiveFailures).toBe(1);
+      expect(stats.lastError).toContain('not a valid model ID');
+      expect(stats.lastFailedModel).toBe('new-model');
+      expect(stats.lastErrorAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    });
+
+    it('resets consecutiveFailures to 0 after a later success, keeping the total', async () => {
+      const provider = {
+        name: 'mock',
+        initialize: vi.fn(),
+        healthCheck: vi.fn(),
+        chat: vi.fn()
+          .mockRejectedValueOnce(new Error('first failure'))
+          .mockRejectedValueOnce(new Error('second failure'))
+          .mockResolvedValueOnce({
+            id: 'mock-id',
+            content: JSON.stringify({ facts: [], proposals: [], confidence: 'high' }),
+            toolCalls: [],
+            finishReason: 'stop',
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          } satisfies ChatResponse),
+        chatStream: vi.fn(),
+      } as unknown as ProviderAdapter;
+
+      const parser = new SemanticParser(provider);
+
+      await parser.parse('I live in Berlin', TEST_CONTEXT);
+      await parser.parse('I live in Hamburg', TEST_CONTEXT);
+      await parser.parse('I live in Munich', TEST_CONTEXT);
+
+      const stats = parser.getStats();
+      expect(stats.failures).toBe(2);
+      expect(stats.consecutiveFailures).toBe(0);
+    });
+
+    it('does not change stats for a trivial message', async () => {
+      const provider = createMockProvider('{}');
+      const parser = new SemanticParser(provider);
+
+      await parser.parse('Hello', TEST_CONTEXT);
+
+      const stats = parser.getStats();
+      expect(stats.failures).toBe(0);
+      expect(stats.consecutiveFailures).toBe(0);
+      expect(stats.lastError).toBeUndefined();
+      expect(provider.chat).not.toHaveBeenCalled();
+    });
   });
 });

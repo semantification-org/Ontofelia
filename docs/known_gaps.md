@@ -68,5 +68,4 @@
 - **Entity resolution:** owner ↔ named person sameAs link was missing — fixed in rel/correctness-bugs
 - **KG scaling:** embedded Oxigraph single-threaded writes
 - **Property chains:** owl:propertyChainAxiom not yet wired in the reasoner
-</content>
-</invoke>
+- **Docker deployment:** not supported (instructions removed, see [deployment.md](deployment.md))

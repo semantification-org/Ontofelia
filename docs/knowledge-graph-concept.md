@@ -1015,4 +1015,3 @@ For shared facts the same pattern applies with `urn:shared:world`,
 10. **Conflict detection + belief revision:** detect contradictions over accepted claims → `urn:<agent>:conflicts`, resolve via `status "superseded"`
 11. **Multi-agent consolidation:** weighted claim/evidence comparison → `shared:world` promotion
 12. **Hybrid retrieval:** vector index + SPARQL templates + graph expansion
-</content>

@@ -41,6 +41,8 @@ export class FusekiWatchdog {
       });
       return res.ok;
     } catch {
+      // Expected: a failed ping means Fuseki is unhealthy, which is exactly
+      // what the caller wants to know — the probe's job is to report false.
       return false;
     }
   }

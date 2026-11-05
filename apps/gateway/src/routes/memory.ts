@@ -291,8 +291,33 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const backupPath = path.join(backupDir, `knowledge-${ts}.ttl`);
 
+      // Count every triple (default graph and all named graphs) so an empty
+      // backup of a non-empty store can be told apart from an empty store.
+      let tripleCount: number | null = null;
+      try {
+        const countResult = await triplestore.query(
+          'SELECT (COUNT(*) AS ?n) WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }',
+        );
+        const n = Number(countResult.bindings?.[0]?.n?.value);
+        if (Number.isFinite(n)) tripleCount = n;
+      } catch (e) {
+        logger.warn('Could not count triples before knowledge delete: ' + (e as Error).message);
+      }
+
       const turtle = await triplestore.exportDataset('turtle');
-      await fs.promises.writeFile(backupPath, turtle, 'utf-8');
+      const tmpPath = `${backupPath}.tmp`;
+      await fs.promises.writeFile(tmpPath, turtle, 'utf-8');
+      await fs.promises.rename(tmpPath, backupPath);
+      const backupBytes = (await fs.promises.stat(backupPath)).size;
+
+      if (turtle.trim().length === 0 && tripleCount !== 0) {
+        await fs.promises.rm(backupPath, { force: true });
+        const message = tripleCount === null
+          ? 'backup is empty and the store size could not be verified — nothing deleted'
+          : `backup is empty although the store holds ${tripleCount} triples — nothing deleted`;
+        logger.error(message);
+        return reply.code(500).send({ error: message });
+      }
 
       await triplestore.update(`DROP ALL`);
       lastKnowledgeDelete = now;
@@ -303,7 +328,7 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
         agentId: 'system',
         toolName: 'knowledge_delete',
         input: { reason: 'API request to DELETE /api/knowledge' },
-        output: { deleted: true, backupPath },
+        output: { deleted: true, backupPath, backupBytes },
         success: true,
         duration: 0,
         permissions: ['memory:delete']
@@ -322,7 +347,7 @@ export default async function memoryRoutes(fastify: FastifyInstance, ctx: Gatewa
       }
 
       logger.info('Knowledge graph cleared');
-      return { deleted: true, backupPath, timestamp: new Date().toISOString() };
+      return { deleted: true, backupPath, backupBytes, timestamp: new Date().toISOString() };
     } catch (e) {
       logger.error('Failed to clear knowledge: ' + (e as Error).message);
       return reply.code(500).send({ error: (e as Error).message });

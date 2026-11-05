@@ -32,6 +32,25 @@ export interface OntologyContext {
   }>;
 }
 
+/**
+ * Running failure counters for a SemanticParser instance. Lets callers
+ * surface "the parser model is broken and silently producing zero facts"
+ * instead of it going unnoticed (every parse failure otherwise just yields
+ * an empty result, with no log and no counter).
+ */
+export interface SemanticParserStats {
+  /** Total parse() calls that ended in the catch (LLM/network error). */
+  failures: number;
+  /** Failures since the last successful provider call; reset to 0 on success. */
+  consecutiveFailures: number;
+  /** Message of the most recent failure. */
+  lastError?: string;
+  /** ISO timestamp of the most recent failure. */
+  lastErrorAt?: string;
+  /** Model configured at the time of the most recent failure. */
+  lastFailedModel?: string;
+}
+
 export interface SemanticParserConfig {
   /** The LLM model to use for parsing (should be fast/cheap, e.g. a small model) */
   model: string;
@@ -196,6 +215,7 @@ Respond ONLY with JSON. No Markdown, no explanations.`;
 export class SemanticParser {
   private trivialDetector = new TrivialMessageDetector();
   private config: SemanticParserConfig;
+  private stats: SemanticParserStats = { failures: 0, consecutiveFailures: 0 };
 
   /** Placeholder values that are not real entities. */
   private static readonly JUNK_VALUES = new Set([
@@ -253,6 +273,11 @@ export class SemanticParser {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
+  /** Snapshot of the parser's failure counters (see `SemanticParserStats`). */
+  getStats(): SemanticParserStats {
+    return { ...this.stats };
+  }
+
   /**
    * Parse a user message into structured semantic facts.
    *
@@ -305,6 +330,10 @@ export class SemanticParser {
 
       const parseTimeMs = Date.now() - start;
 
+      // The provider call succeeded (even if its content turns out not to be
+      // JSON below) — the model itself is responsive again.
+      this.stats.consecutiveFailures = 0;
+
       // Parse LLM JSON output
       const llmOutput = this.extractJSON(response.content);
       if (!llmOutput) {
@@ -333,7 +362,14 @@ export class SemanticParser {
         },
       };
     } catch (error) {
-      // On LLM error, return empty result — don't block the answer flow
+      // On LLM error, return empty result — don't block the answer flow.
+      // Still record it: a broken model id otherwise fails silently forever.
+      const message = (error as Error).message;
+      this.stats.failures += 1;
+      this.stats.consecutiveFailures += 1;
+      this.stats.lastError = message;
+      this.stats.lastErrorAt = new Date().toISOString();
+      this.stats.lastFailedModel = this.config.model;
       return {
         facts: [],
         proposals: [],
@@ -342,7 +378,7 @@ export class SemanticParser {
           parseTimeMs: Date.now() - start,
           modelUsed: this.config.model,
           skipped: false,
-          skipReason: `parser_error: ${(error as Error).message}`,
+          skipReason: `parser_error: ${message}`,
         },
       };
     }
@@ -377,6 +413,8 @@ export class SemanticParser {
     try {
       return JSON.parse(jsonStr) as ParserLLMOutput;
     } catch {
+      // Expected: malformed JSON from the LLM — the caller treats a null
+      // return as "non-JSON output" and falls back to an empty parse result.
       return null;
     }
   }
