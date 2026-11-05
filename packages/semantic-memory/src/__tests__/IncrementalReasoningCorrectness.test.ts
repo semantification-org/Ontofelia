@@ -189,6 +189,38 @@ describe('incremental reasoning correctness (oracle = full reasoner run)', () =>
     expect(await oracle(CORE_TTL, [...abox, ...delta], delta)).toEqual([]);
   });
 
+  it('9. long transitive chain, new fact at the far end', async () => {
+    // Defeats 2-hop scoping: a partOf b is three hops from the new fact's nodes,
+    // so a view limited to two hops loses a partOf e.
+    const abox = [
+      uri(ex('a'), `${O}partOf`, ex('b')),
+      uri(ex('b'), `${O}partOf`, ex('c')),
+      uri(ex('c'), `${O}partOf`, ex('d')),
+    ];
+    const delta = [uri(ex('d'), `${O}partOf`, ex('e'))];
+    await check(CORE_TTL, abox, delta, [
+      uri(ex('a'), `${O}partOf`, ex('e')),
+      uri(ex('b'), `${O}partOf`, ex('e')),
+      uri(ex('c'), `${O}partOf`, ex('e')),
+    ]);
+  });
+
+  it('10. sameAs from a functional property reaching a node three hops away', async () => {
+    // Defeats 2-hop scoping: k locatedIn m is three hops from alice and lyon, and
+    // k locatedIn lyon needs it together with paris = lyon and the transitive chain.
+    const abox = [
+      uri(ex('alice'), `${O}livesIn`, ex('paris')),
+      uri(ex('m'), `${O}locatedIn`, ex('paris')),
+      uri(ex('k'), `${O}locatedIn`, ex('m')),
+    ];
+    const delta = [uri(ex('alice'), `${O}livesIn`, ex('lyon'))];
+    await check(CORE_TTL, abox, delta, [
+      uri(ex('paris'), OWL_SAME_AS, ex('lyon')),
+      uri(ex('m'), `${O}locatedIn`, ex('lyon')),
+      uri(ex('k'), `${O}locatedIn`, ex('lyon')),
+    ]);
+  });
+
   // The engine exposes only `materialize`; there is no retract/remove entry point.
   it.todo('8. retraction: engine has no retraction API (materialize is add-only)');
 });
