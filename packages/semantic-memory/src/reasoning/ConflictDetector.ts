@@ -38,7 +38,11 @@ export class ConflictDetector {
     const values = (v: string, graphs: string[]) => `VALUES ${v} { ${graphs.map((g) => sparqlIri(g)).join(' ')} }`;
     const aboxGraphs = [GraphUriResolver.getWorldviewGraph(agentId)];
     if (userId) aboxGraphs.push(GraphUriResolver.getUserGraph(agentId, userId));
-    const tboxGraphs = [SHARED_GRAPHS.ONTOLOGY, GraphUriResolver.getSchemaGraph(agentId)];
+    const tboxGraphs = [
+      SHARED_GRAPHS.ONTOLOGY,
+      GraphUriResolver.getOntologyGraph(agentId),
+      GraphUriResolver.getSchemaGraph(agentId),
+    ];
 
     // 1. Disjoint-class violations
     try {

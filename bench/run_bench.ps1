@@ -8,6 +8,10 @@ $global:OntoToken = $null
 $global:OntoBase = 'http://127.0.0.1:18780'
 $global:DataFile = "$env:USERPROFILE\dev\Ontofelia\.ontofelia\triplestore\oxigraph\dataset.nq"
 $global:BootstrapKeep = "$env:USERPROFILE\dev\Ontofelia\.ontofelia\triplestore\oxigraph\dataset.bootstrap.nq"
+# The harness writes dataset.nq, which only the file backend reads. With the on-disk
+# store (memory.oxigraphStore "disk") the gateway would ignore it and the figures would
+# describe stale data, so Run-Bench refuses to start while that store exists.
+$global:DiskStoreDir = "$env:USERPROFILE\dev\Ontofelia\.ontofelia\triplestore\oxigraph-disk"
 
 function Get-Token {
   $raw = & ontofelia auth token 2>&1
@@ -117,6 +121,9 @@ function Run-Bench {
     [int[]]$Levels = @(300, 3000, 14000, 28000),
     [string]$Msg = 'Mein neues Hobby ist Bouldern.'
   )
+  if (Test-Path $global:DiskStoreDir) {
+    throw "Run-Bench measures the file backend only, but an on-disk store exists at $global:DiskStoreDir. Switch memory.oxigraphStore to 'file' and move that directory away first."
+  }
   Save-Bootstrap
   $results = @()
   foreach ($n in $Levels) {

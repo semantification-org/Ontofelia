@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter, type OxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { ConflictDetector } from '../reasoning/ConflictDetector.js';
 
@@ -24,8 +24,8 @@ const ALICE_GRAPH = `urn:${AGENT}:user:alice`;
 const WORLDVIEW = `urn:${AGENT}:worldview`;
 const ONTOLOGY = 'urn:shared:ontology';
 
-async function makeStore(): Promise<OxigraphAdapter> {
-  const store = new OxigraphAdapter();
+async function makeStore(): Promise<OxigraphTestAdapter> {
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',
@@ -36,14 +36,14 @@ async function makeStore(): Promise<OxigraphAdapter> {
   return store;
 }
 
-async function insert(store: OxigraphAdapter, graph: string, triples: string): Promise<void> {
+async function insert(store: OxigraphTestAdapter, graph: string, triples: string): Promise<void> {
   await store.update(`INSERT DATA { GRAPH <${graph}> { ${triples} } }`);
 }
 
 const aliceCtx = { agentId: AGENT, userId: 'alice', sessionId: 's1', isOwner: false };
 
 describe('recall labels are scoped to the acting user', () => {
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   let engine: KnowledgeEngine;
 
   beforeEach(async () => {
@@ -86,7 +86,7 @@ describe('recall labels are scoped to the acting user', () => {
 });
 
 describe('entity reuse by label is scoped to the acting user', () => {
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   let engine: KnowledgeEngine;
 
   beforeEach(async () => {
@@ -148,7 +148,7 @@ describe('entity reuse by label is scoped to the acting user', () => {
 });
 
 describe('ConflictDetector is scoped to worldview + the given user', () => {
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   let detector: ConflictDetector;
 
   beforeEach(async () => {
@@ -193,7 +193,7 @@ describe('ConflictDetector is scoped to worldview + the given user', () => {
 describe('claim supersession and clashes stay inside one graph', () => {
   const LIVES = 'urn:ontofelia:core#livesIn';
   const CORE = 'urn:shared:ontology#';
-  let store: OxigraphAdapter;
+  let store: OxigraphTestAdapter;
   let engine: KnowledgeEngine;
 
   async function claimStatus(obj: string): Promise<string[]> {

@@ -15,6 +15,34 @@ import { loadConfig } from '@ontofelia/config';
 /** Counts triples in all named graphs; the default graph holds no data. */
 export const TRIPLE_COUNT_QUERY = 'SELECT (COUNT(*) AS ?c) WHERE { GRAPH ?g { ?s ?p ?o } }';
 
+/**
+ * Deletes every data directory a factory reset owns under `ontoDir` and returns
+ * how many were removed. The knowledge graph lives in `triplestore/oxigraph`
+ * (file backend) or `triplestore/oxigraph-disk` (on-disk backend); both go, or
+ * a reset on one backend would leave the other's data to come back at the next start.
+ */
+export async function deleteDataDirs(ontoDir: string): Promise<number> {
+  const dirsToDelete = [
+    path.join(ontoDir, 'agents'),                           // sessions.db + transcripts + audit
+    path.join(ontoDir, 'logs'),                              // gateway logs
+    path.join(ontoDir, 'triplestore', 'tdb2'),               // TDB2 database files (the actual data!)
+    path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'databases'),  // Fuseki runtime DB copies
+    path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'system'),     // Fuseki system catalog
+    path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'logs'),       // Fuseki access logs
+    path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'backups'),    // any backups
+    path.join(ontoDir, 'triplestore', 'oxigraph'),                    // Oxigraph embedded DB (file backend)
+    path.join(ontoDir, 'triplestore', 'oxigraph-disk'),               // Oxigraph embedded DB (on-disk backend)
+  ];
+  let deletedCount = 0;
+  for (const dir of dirsToDelete) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      deletedCount++;
+    } catch { /* ignored */ }
+  }
+  return deletedCount;
+}
+
 export function registerResetCommand(program: Command) {
   // ---- RESET COMMAND ----
   program
@@ -63,23 +91,7 @@ export function registerResetCommand(program: Command) {
   
       // 2. Delete ALL data (with correct paths)
       console.log(chalk.cyan('  [2/5] Deleting data...'));
-      const dirsToDelete = [
-        path.join(ontoDir, 'agents'),                           // sessions.db + transcripts + audit
-        path.join(ontoDir, 'logs'),                              // gateway logs
-        path.join(ontoDir, 'triplestore', 'tdb2'),               // TDB2 database files (the actual data!)
-        path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'databases'),  // Fuseki runtime DB copies
-        path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'system'),     // Fuseki system catalog
-        path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'logs'),       // Fuseki access logs
-        path.join(ontoDir, 'triplestore', 'fuseki', 'run', 'backups'),    // any backups
-        path.join(ontoDir, 'triplestore', 'oxigraph'),                    // Oxigraph embedded DB
-      ];
-      let deletedCount = 0;
-      for (const dir of dirsToDelete) {
-        try {
-          await fs.rm(dir, { recursive: true, force: true });
-          deletedCount++;
-        } catch { /* ignored */ }
-      }
+      const deletedCount = await deleteDataDirs(ontoDir);
       // Also clear PID file and Fuseki config (will be regenerated)
       try { await fs.unlink(path.join(ontoDir, 'gateway.pid')); } catch { /* ignored */ }
       try { await fs.unlink(path.join(ontoDir, 'triplestore', 'fuseki-config.ttl')); } catch { /* ignored */ }

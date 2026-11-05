@@ -1,0 +1,31 @@
+{
+  "name": "@ontofelia/disk-store",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "disk-store",
+    "triples": {
+      "defaults": true,
+      "additional": []
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:native": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "vitest run",
+    "lint": "eslint scripts test"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
+    "@types/node": "^22.0.0",
+    "oxigraph": "^0.5.8",
+    "vitest": "^3.2.6"
+  },
+  "license": "Apache-2.0"
+}

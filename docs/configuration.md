@@ -109,6 +109,7 @@ All values shown are the defaults.
   // Semantic Memory
   memory: {
     backend: "oxigraph",            // "oxigraph" (default, embedded) | "fuseki" (legacy sidecar) | "memory" (no persistence)
+    oxigraphStore: "file",          // "file" (default) | "disk" - storage of the embedded Oxigraph backend, see below
     triplestore: {
       type: "embedded",             // "embedded" | "sidecar" | "remote"
       dataDir: "~/.ontofelia/triplestore",
@@ -155,6 +156,8 @@ All values shown are the defaults.
 }
 ```
 
+`memory.oxigraphStore` (only read when `memory.backend` is `"oxigraph"`): `"file"` (default) keeps the dataset in memory and rewrites `~/.ontofelia/triplestore/oxigraph/dataset.nq` after every write. `"disk"` uses the native on-disk store (RocksDB) in `~/.ontofelia/triplestore/oxigraph-disk`, where a write does not grow with the dataset size. It needs the native binary (`ONTOFELIA_BUILD_DISK_STORE=1 pnpm --filter @ontofelia/disk-store build`; startup fails with that hint when it is missing). When the gateway opens an empty on-disk store and `~/.ontofelia/triplestore/oxigraph/dataset.nq` exists and has content, it imports that file once at startup (graphs are kept); a store that already holds data is never overwritten, and a file that does not parse stops the startup. The file is only read, never changed or deleted, so it stays as a way back: after switching back to `"file"` you see the dataset as it was at the import, and changes made in `"disk"` mode do not flow back. SPARQL endpoint queries run on a native thread-pool task, so the gateway needs no worker for them; the caller gets the timeout at the query deadline (`memory.sparqlTimeoutMs`). The native evaluation is cancelled too, but it stops only when it next reads data, so a pure cross product can keep one thread-pool thread busy for a while after the timeout.
+
 Keys the schema does not know are ignored when the file is loaded, so a config file that still contains removed options (`messages`, `routing`, `commands`, `session.scope`, `security.requireGuardian`) keeps loading; those options never had any effect and are dropped.
 
 ## Environment Variables
@@ -168,6 +171,8 @@ These override config file values at load time:
 | `ONTOFELIA_BIND` | Bind mode (`loopback`, `lan`, `tailnet`, `custom`) |
 | `OPENAI_API_KEY` | OpenAI API key (used when `provider.apiKey` is unset) |
 | `OPENROUTER_API_KEY` | OpenRouter API key (used when `provider.apiKey` is unset) |
+
+`ONTOFELIA_AGENT_DEBUG=1` prints the agent's per-turn debug events (`[AgentDebug] …`) and every raw inbound Telegram update (`Incoming Telegram msg: …`) to stdout. They contain chat content, names, ids and raw tool arguments, so leave it unset outside local debugging; without it nothing of the sort is printed.
 
 The config directory itself is always `~/.ontofelia` (derived from the home directory of the user running the gateway).
 

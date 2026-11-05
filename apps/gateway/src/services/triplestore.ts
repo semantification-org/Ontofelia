@@ -4,9 +4,9 @@ import * as os from 'os';
 import type { OntofeliaConfig } from '@ontofelia/config';
 import type { Logger } from 'pino';
 import { PRIMARY_AGENT_ID } from '@ontofelia/core';
-import { seedDefaultsForFreshInstall } from '@ontofelia/agent-runtime';
+import { seedDefaultsForFreshInstall, freshInstallSeededMessage } from '@ontofelia/agent-runtime';
 import {
-  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter,
+  FusekiManager, FusekiAdapter, InMemoryAdapter, OxigraphAdapter, OxigraphDiskAdapter,
   OntologyManager, ConflictDetector, ReflectionRunner, KnowledgeEngine,
   FusekiWatchdog, GraphRegistry, GraphUriResolver
 } from '@ontofelia/semantic-memory';
@@ -43,12 +43,35 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
     }, logger);
     fusekiWatchdog.start();
   } else if (config.memory.backend === 'oxigraph') {
-    const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
-    triplestore = new OxigraphAdapter();
-    await triplestore.initialize({
-      backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
-    });
-    logger.info('Started Oxigraph Triplestore in embedded mode.');
+    if (config.memory.oxigraphStore === 'disk') {
+      // Separate directory from the file adapter. An install that switches over
+      // has its dataset.nq imported once, below, while the store is still empty;
+      // the file is kept as a way back.
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph-disk');
+      triplestore = new OxigraphDiskAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      const fileDataset = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph', 'dataset.nq');
+      try {
+        // Must run before anything is written (the core ontology below), or the store is no longer empty.
+        const imp = await triplestore.importFileDataset(fileDataset);
+        if (imp.imported) {
+          logger.info(`Imported ${imp.quads} quads from the file store (${fileDataset}) into the on-disk store; the file is kept.`);
+        }
+      } catch (e) {
+        logger.error(`Could not import the file store into the on-disk store: ${(e as Error).message}`);
+        throw e;
+      }
+      logger.info('Started Oxigraph Triplestore in embedded mode (on-disk store).');
+    } else {
+      const dataDir = path.join(os.homedir(), '.ontofelia', 'triplestore', 'oxigraph');
+      triplestore = new OxigraphAdapter();
+      await triplestore.initialize({
+        backend: 'oxigraph', type: 'embedded', dataDir, port: 0, endpoint: ''
+      });
+      logger.info('Started Oxigraph Triplestore in embedded mode.');
+    }
   } else {
     triplestore = new InMemoryAdapter();
     await triplestore.initialize({
@@ -89,7 +112,7 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
       const fresh = seeded.includes(GraphUriResolver.getSelfGraph(PRIMARY_AGENT_ID));
       const r = await seedDefaultsForFreshInstall(triplestore, PRIMARY_AGENT_ID, fresh);
       if (r.seeded) {
-        logger.info(`Cognitive layer defaults written for a new install (${r.flags.length} flags on; retention and initiative stay off)`);
+        logger.info(freshInstallSeededMessage(r.flags.length));
       }
     } catch (e) {
       logger.warn('Could not write the cognitive layer defaults: ' + (e as Error).message);
@@ -101,8 +124,15 @@ export async function initTriplestore(config: OntofeliaConfig, currentDir: strin
   // Ontology & Reasoning
   const ontologyBasePath = path.join(os.homedir(), '.ontofelia', 'ontology', 'agents', PRIMARY_AGENT_ID);
   const coreOntologyPath = path.resolve(currentDir, '..', '..', '..', 'packages', 'semantic-memory', 'dist', 'ontologies', 'ontofelia-core.ttl');
-  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath);
+  const ontologyManager = new OntologyManager(PRIMARY_AGENT_ID, ontologyBasePath, triplestore);
   await ontologyManager.initialize(coreOntologyPath);
+  // Load the approved ontology version, so it survives a restart.
+  try {
+    await ontologyManager.syncActiveToStore();
+    logger.info('Active ontology version loaded into ' + GraphUriResolver.getOntologyGraph(PRIMARY_AGENT_ID));
+  } catch (e) {
+    logger.warn('Could not load the active ontology version: ' + (e as Error).message);
+  }
 
   const conflictDetector = new ConflictDetector(triplestore);
   const reflectionRunner = new ReflectionRunner(triplestore, conflictDetector, ontologyManager);

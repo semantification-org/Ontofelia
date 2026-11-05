@@ -1,0 +1,5 @@
+/target
+/node_modules
+
+# Native N-API artifacts are built from src/lib.rs and are never committed.
+*.node

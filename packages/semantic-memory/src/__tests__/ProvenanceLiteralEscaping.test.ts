@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { sparqlIri, sparqlStringLiteral } from '../utils/SparqlSyntax.js';
 
@@ -13,7 +13,7 @@ const PAYLOAD =
   'x" . } } ; INSERT DATA { GRAPH <urn:pwn> { <urn:pwn:a> <urn:pwn:b> <urn:pwn:c> . #';
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

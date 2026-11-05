@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { rm } from 'node:fs/promises';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { KnowledgeEngine } from '../KnowledgeEngine.js';
 import { GraphRegistry } from '../utils/GraphRegistry.js';
 import { SemanticIngestionService } from '../ingestion/SemanticIngestionService.js';
@@ -40,7 +40,7 @@ describe('re-assertion of an existing triple', () => {
 
   beforeEach(async () => {
     dir = `/tmp/reassert-test-${Math.random().toString(16).slice(2)}`;
-    store = new OxigraphAdapter();
+    store = createOxigraphTestAdapter();
     await store.initialize({ backend: 'oxigraph', type: 'embedded', dataDir: dir, port: 0, endpoint: '' });
     engine = new KnowledgeEngine(store, undefined, GraphRegistry.create([AGENT]));
   });

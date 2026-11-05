@@ -24,8 +24,13 @@ export class OntologyInspectTool implements ToolDefinition {
     const type = args.type || 'all';
 
     // The ontology lives in named graphs only: the shared TBox plus the agent's
-    // own schema graph. The default graph is empty on the embedded store.
-    const graphs = [SHARED_GRAPHS.ONTOLOGY, GraphUriResolver.getSchemaGraph(context.agentId)];
+    // approved ontology and its own schema graph. The default graph is empty on
+    // the embedded store.
+    const graphs = [
+      SHARED_GRAPHS.ONTOLOGY,
+      GraphUriResolver.getOntologyGraph(context.agentId),
+      GraphUriResolver.getSchemaGraph(context.agentId),
+    ];
     let graphValues: string;
     try {
       graphValues = `VALUES ?g { ${graphs.map((g) => sparqlIri(g)).join(' ')} }`;

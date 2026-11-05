@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { EpisodicMemory } from '../cognitive/EpisodicMemory.js';
 
 // Retention tiering (doc 05 §7) runs against the embedded Oxigraph store, like
@@ -12,7 +12,7 @@ const COGT = 'urn:shared:ontology#cog/';
 const EP_GRAPH = 'urn:ontofelia:cog:episodic';
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',

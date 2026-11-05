@@ -251,7 +251,8 @@ export class OxigraphAdapter implements TriplestoreAdapter {
   }
 
   async deleteGraph(graphUri: string): Promise<void> {
-    const sparql = `CLEAR GRAPH ${sparqlIri(graphUri)}`;
+    // SILENT: deleting a graph that does not exist is a no-op, as on Fuseki (404 tolerated).
+    const sparql = `CLEAR SILENT GRAPH ${sparqlIri(graphUri)}`;
     await this.update(sparql);
   }
 

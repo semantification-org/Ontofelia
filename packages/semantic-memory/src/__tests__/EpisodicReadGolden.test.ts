@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { TriplestoreAdapter } from '@ontofelia/core';
-import { OxigraphAdapter } from '../adapters/OxigraphAdapter.js';
+import { createOxigraphTestAdapter } from './helpers/oxigraphTestAdapter.js';
 import { EpisodicMemory, type EpisodeHit } from '../cognitive/EpisodicMemory.js';
 
 // Golden comparison: the read paths return exactly what they returned before the
@@ -9,7 +9,7 @@ import { EpisodicMemory, type EpisodeHit } from '../cognitive/EpisodicMemory.js'
 // episode ids before comparing.
 
 async function makeStore(): Promise<TriplestoreAdapter> {
-  const store = new OxigraphAdapter();
+  const store = createOxigraphTestAdapter();
   await store.initialize({
     backend: 'oxigraph',
     type: 'embedded',
