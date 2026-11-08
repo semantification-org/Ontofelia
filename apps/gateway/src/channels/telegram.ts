@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { fileURLToPath } from 'url';
 import { createLogger, MessageEnvelope, PRIMARY_AGENT_ID, resolveAgentId } from '@ontofelia/core';
 import type { AgentRuntime } from '@ontofelia/agent-runtime';
 import { resolveTelegramSender } from '@ontofelia/channels';
@@ -9,6 +10,39 @@ import type { AllowlistStore } from '@ontofelia/channels';
 import type { OntofeliaConfig } from '@ontofelia/config';
 
 const logger = createLogger('telegram');
+
+// The avatar image shipped with this installation; the self-description lets
+// the model embed it for anyone who asks, so it may be sent to non-owners.
+const BUNDLED_AVATAR = fileURLToPath(
+  new URL('../../../web-ui/public/ontofelia-avatar.jpg', import.meta.url),
+);
+
+function isInside(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Decide whether a local file named in a reply may be uploaded. The owner may
+ * upload any file. Anyone else only gets files that, after resolving symlinks,
+ * lie inside the workspace, or the bundled avatar. Any resolution error means
+ * "not allowed".
+ */
+export function isUploadAllowed(filePath: string, workspace: string, isOwner: boolean): boolean {
+  if (isOwner) return true;
+  try {
+    const real = fs.realpathSync(filePath);
+    const workspaceReal = fs.realpathSync(workspace.replace(/^~/, os.homedir()));
+    if (isInside(workspaceReal, real)) return true;
+    try {
+      return real === fs.realpathSync(BUNDLED_AVATAR);
+    } catch {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
 
 // Headroom under the 4096 cap for the context line that may be prepended
 // and for any code-block fences we re-emit when splitting inside one.
@@ -261,6 +295,11 @@ export async function setupTelegramChannel(
         filePath = path.resolve(workspacePath, '..', filePath);
       }
       if (fs.existsSync(filePath)) {
+        const workspaceDir = config.agents.defaults.workspace.replace(/^~/, os.homedir());
+        if (!isUploadAllowed(filePath, workspaceDir, offeredTo?.sender?.isOwner === true)) {
+          logger.warn(`Not uploading image outside the workspace for a non-owner: ${path.basename(filePath)}`);
+          continue;
+        }
         imagesToSend.push({ caption: match[1] || '', filePath });
       }
     }
