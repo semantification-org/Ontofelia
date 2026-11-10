@@ -1251,6 +1251,8 @@ Users can use these commands:
         toolName: toolCall.name,
         command: (toolArgs as { command?: string }).command,
         args: toolArgs,
+        channelType: context.channelType,
+        senderId: context.senderId,
       });
       this.trackGuardianSession(toolCall.id, context.sessionId);
       approved = await this.waitForGuardianApproval(toolCall.id, 60000);

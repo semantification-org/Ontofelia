@@ -472,7 +472,11 @@ export async function setupTelegramChannel(
 
         removeDebug = agent.onDebug((event) => {
           if (event.phase === 'guardian_confirm') {
-            const data = event.data as { callId?: string; toolName?: string; command?: string; args?: unknown };
+            const data = event.data as { callId?: string; toolName?: string; command?: string; args?: unknown; channelType?: string; senderId?: string };
+            // The debug bus broadcasts to every running conversation. Show the
+            // request only in the conversation that raised it; an event
+            // without a matching origin is shown nowhere.
+            if (data?.senderId !== envelope.sender.id || data?.channelType !== 'telegram') return;
             const callId = data?.callId;
             const toolName = data?.toolName || 'unknown';
             

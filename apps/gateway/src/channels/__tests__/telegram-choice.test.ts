@@ -103,7 +103,7 @@ describe('telegram choice capture', { timeout: 60_000 }, () => {
       handleMessage: async (env: { text: string }) => {
         handled.push(env.text);
         if (env.text === 'run something risky') {
-          debugCb?.({ phase: 'guardian_confirm', data: { callId: 'call-1', toolName: 'exec', command: 'rm -rf x' } });
+          debugCb?.({ phase: 'guardian_confirm', data: { callId: 'call-1', toolName: 'exec', command: 'rm -rf x', channelType: 'telegram', senderId: 'owner' } });
           await tick();
           return { text: 'ok', sessionId: 'sess-1' };
         }
