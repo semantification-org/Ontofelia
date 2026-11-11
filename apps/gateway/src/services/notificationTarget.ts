@@ -1,3 +1,5 @@
+import { normalizeTelegramOwnerId } from '@ontofelia/channels';
+
 /**
  * Owner delivery-target resolution for proactive notifications
  * (docs/initiative-architecture.md §7; adversarial-review M4).
@@ -9,12 +11,24 @@
  * uses an allowlist entry when it can VERIFY it is the sole allowlisted user;
  * otherwise it returns no target (the caller suppresses with reason 'no-target'
  * and warns that an explicit owner target must be configured).
+ *
+ * Precedence: configured target, then owner chat id, then the configured
+ * Telegram owner id, then the sole allowlist entry. The owner id applies
+ * whenever it is set, so the target is never a user whom the identity check
+ * (`resolveTelegramSender`) treats as a non-owner. The sole-allowlist fallback
+ * is used only when no owner id is set (legacy mode, where every approved
+ * account is the owner).
  */
 export interface OwnerTargetInput {
   /** config.notifications.target — explicit override, highest precedence. */
   configuredTarget?: string;
   /** channels.telegram.ownerChatId — the designated owner chat. */
   ownerChatId?: string;
+  /**
+   * channels.telegram.ownerId — the owner's Telegram user id. In a DM the chat
+   * id equals the user id, so it doubles as the delivery target.
+   */
+  ownerId?: string;
   /** senderIds of the telegram allowlist (DMs: senderId === chatId). */
   allowlistSenderIds: string[];
 }
@@ -29,8 +43,10 @@ export interface OwnerTargetResult {
 export function resolveOwnerTarget(input: OwnerTargetInput): OwnerTargetResult {
   if (input.configuredTarget) return { target: input.configuredTarget };
   if (input.ownerChatId) return { target: input.ownerChatId };
+  const ownerId = normalizeTelegramOwnerId(input.ownerId);
+  if (ownerId !== undefined) return { target: ownerId };
   const ids = input.allowlistSenderIds ?? [];
-  // ONLY trust the allowlist when there is exactly one entry (the sole
+  // Legacy mode (no owner id): ONLY trust the allowlist when there is exactly one entry (the sole
   // allowlisted user is unambiguously the owner). Never guess among several.
   if (ids.length === 1) return { target: ids[0] };
   if (ids.length === 0) return { reason: 'no-allowlist' };
