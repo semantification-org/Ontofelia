@@ -85,9 +85,9 @@ describe('semantic parser model resolution and failure visibility', () => {
     await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   });
 
-  const buildRuntime = (providerConfig?: ProviderConfig): AgentRuntime => {
+  const buildRuntime = (providerConfig?: ProviderConfig, agentModel = 'mock/mock'): AgentRuntime => {
     const config: AgentConfig = {
-      agentId: AGENT, name: 'test', model: 'mock/mock',
+      agentId: AGENT, name: 'test', model: agentModel,
       workspace: path.join(tmpRoot, 'workspace'),
       systemPrompt: 'You are a test',
       memoryPolicy: { autoFlushBeforeCompaction: true, defaultConfidence: 'high', trustUntrustedContent: true },
@@ -112,7 +112,7 @@ describe('semantic parser model resolution and failure visibility', () => {
       defaultModel: 'fast',
       aliases: { fast: 'vendor/real-model' },
     };
-    const runtime = buildRuntime(providerConfig);
+    const runtime = buildRuntime(providerConfig, 'fast');
 
     await runtime.handleMessage(env('My name is Alice and I live in Berlin.'));
 
@@ -129,7 +129,7 @@ describe('semantic parser model resolution and failure visibility', () => {
       aliases: {},
     };
     provider.failParserWith = new Error('400 broken-model is not a valid model ID');
-    const runtime = buildRuntime(providerConfig);
+    const runtime = buildRuntime(providerConfig, 'provider/model');
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const warnSpy = vi.spyOn((runtime as any).logger, 'warn');

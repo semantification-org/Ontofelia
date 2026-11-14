@@ -49,6 +49,8 @@ export interface SemanticParserStats {
   lastErrorAt?: string;
   /** Model configured at the time of the most recent failure. */
   lastFailedModel?: string;
+  /** Parses skipped because the configured model is not offered by the provider. */
+  skippedUnknownModel?: number;
 }
 
 export interface SemanticParserConfig {
@@ -215,7 +217,8 @@ Respond ONLY with JSON. No Markdown, no explanations.`;
 export class SemanticParser {
   private trivialDetector = new TrivialMessageDetector();
   private config: SemanticParserConfig;
-  private stats: SemanticParserStats = { failures: 0, consecutiveFailures: 0 };
+  private stats: SemanticParserStats = { failures: 0, consecutiveFailures: 0, skippedUnknownModel: 0 };
+  private blocked = false;
 
   /** Placeholder values that are not real entities. */
   private static readonly JUNK_VALUES = new Set([
@@ -278,6 +281,19 @@ export class SemanticParser {
     return { ...this.stats };
   }
 
+  /** Change the model used for all following requests. */
+  setModel(model: string): void {
+    this.config.model = model;
+  }
+
+  /**
+   * Block (or unblock with `false`) all provider requests. While blocked,
+   * parse() returns a skipped result and counts it in `skippedUnknownModel`.
+   */
+  setBlocked(blocked: boolean): void {
+    this.blocked = blocked;
+  }
+
   /**
    * Parse a user message into structured semantic facts.
    *
@@ -302,6 +318,22 @@ export class SemanticParser {
           modelUsed: 'none',
           skipped: true,
           skipReason: trivialCheck.reason,
+        },
+      };
+    }
+
+    // The configured model is known not to exist at the provider: send nothing.
+    if (this.blocked) {
+      this.stats.skippedUnknownModel = (this.stats.skippedUnknownModel ?? 0) + 1;
+      return {
+        facts: [],
+        proposals: [],
+        confidence: 'high',
+        meta: {
+          parseTimeMs: Date.now() - start,
+          modelUsed: 'none',
+          skipped: true,
+          skipReason: 'unknown_model',
         },
       };
     }
