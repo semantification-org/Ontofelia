@@ -36,7 +36,7 @@ async function setup(ownerId: string | undefined) {
     handleMessage: async (env: { sender: { id: string; isOwner: boolean }; text: string }) => {
       handled.push({ sender: env.sender, text: env.text });
       if (env.text === 'run something risky') {
-        debugCb?.({ phase: 'guardian_confirm', data: { callId: 'call-1', toolName: 'exec', command: 'rm -rf x' } });
+        debugCb?.({ phase: 'guardian_confirm', data: { callId: 'call-1', toolName: 'exec', command: 'rm -rf x', channelType: 'telegram', senderId: 'owner' } });
         await tick();
       }
       return { text: 'ok' };

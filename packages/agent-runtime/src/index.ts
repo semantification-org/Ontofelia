@@ -266,6 +266,11 @@ export class AgentRuntime {
 
   private entityMatcher?: EntityMatcher;
   private semanticParser?: SemanticParser;
+  // Outcome of the last parser-model check: the resolved chat model it was made
+  // for, the model the parser may use (a verified fallback, or that same model),
+  // and whether the parser is blocked because the model is not offered.
+  private parserModelCheck?: { forModel: string; model: string; blocked: boolean };
+  private parserModelUnverifiedWarned = new Set<string>();
   private ontologyContextProvider?: OntologyContextProvider;
   private ingestionService?: SemanticIngestionService;
   private graphCatalog?: GraphCatalog;
@@ -328,9 +333,8 @@ export class AgentRuntime {
     }
     // Initialize Semantic Parser (Ontology Learning pipeline)
     if (provider && knowledgeEngine) {
-      const parserModel = providerConfig?.defaultModel || config.model;
       this.semanticParser = new SemanticParser(provider, {
-        model: this.resolveModel(parserModel),
+        model: this.resolveModel(config.model),
         temperature: 0.1,
         maxTokens: 2048,
       });
@@ -400,6 +404,8 @@ export class AgentRuntime {
     // self graph is not touched and nothing reaches the prompt. A failure here
     // must never keep the agent from starting.
     await this.seedDerivedSelfModelIfEnabled().catch((e) => this.emitDebug('error', `self-model derivation failed: ${(e as Error).message}`));
+
+    await this.checkParserModel();
 
     this.lifecycle = 'running';
   }
@@ -575,6 +581,75 @@ export class AgentRuntime {
   /** Parser failure counters (see `SemanticParser.getStats()`), for health checks. */
   getSemanticParserStats(): SemanticParserStats | undefined {
     return this.semanticParser?.getStats();
+  }
+
+  /** Ids the provider is known to offer, or undefined when that is not known. */
+  private async knownModelIds(): Promise<string[] | undefined> {
+    const configured = this.providerConfig?.models;
+    if (configured && configured.length > 0) return configured;
+    if (typeof this.provider?.listModels === 'function') {
+      try {
+        const listed = await this.provider.listModels();
+        if (listed.length > 0) return listed.map(m => m.id);
+      } catch {
+        // an error means the list is unknown
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Check that the model the semantic parser would use is one the provider
+   * offers, before any request is sent. An unknown model disables fact
+   * extraction (or switches to a known fallback model); an unverifiable one
+   * only warns. Never throws.
+   */
+  private async checkParserModel(): Promise<void> {
+    if (!this.semanticParser) return;
+    const wanted = this.resolveModel(this.config.model);
+    const providerName = this.providerConfig?.name || this.provider.name || 'unknown';
+    let known: string[] | undefined;
+    try {
+      known = await this.knownModelIds();
+    } catch {
+      known = undefined;
+    }
+    if (!known) {
+      this.parserModelCheck = { forModel: wanted, model: wanted, blocked: false };
+      if (!this.parserModelUnverifiedWarned.has(wanted)) {
+        this.parserModelUnverifiedWarned.add(wanted);
+        this.logger.warn(`Parser model ${wanted} could not be verified: provider ${providerName} offers no model list`);
+      }
+      return;
+    }
+    if (known.includes(wanted)) {
+      this.parserModelCheck = { forModel: wanted, model: wanted, blocked: false };
+      return;
+    }
+    const fallback = (this.providerConfig?.fallbackModels ?? [])
+      .map(m => this.resolveModel(m))
+      .find(m => known!.includes(m));
+    if (fallback) {
+      this.parserModelCheck = { forModel: wanted, model: fallback, blocked: false };
+      this.logger.warn(`Parser model ${wanted} is not offered by provider ${providerName}; fact extraction uses fallback model ${fallback}`);
+      return;
+    }
+    this.parserModelCheck = { forModel: wanted, model: wanted, blocked: true };
+    this.logger.error(`Parser model ${wanted} is not offered by provider ${providerName}; fact extraction is disabled until the model is fixed`);
+  }
+
+  /** Point the parser at the current chat model (or its verified fallback) before a parse. */
+  private syncParserModel(): void {
+    if (!this.semanticParser) return;
+    const wanted = this.resolveModel(this.config.model);
+    const check = this.parserModelCheck;
+    if (check && check.forModel === wanted) {
+      this.semanticParser.setModel(check.model);
+      this.semanticParser.setBlocked(check.blocked);
+    } else {
+      this.semanticParser.setModel(wanted);
+      this.semanticParser.setBlocked(false);
+    }
   }
 
   private resolveModel(model: string): string {
@@ -886,6 +961,7 @@ If a greeting or onboarding template is written in another language, translate a
           const parserInput = documentText
             ? `${textContent}\n\n[Attached document content]\n${documentText}`
             : textContent;
+          this.syncParserModel();
           parseResult = await this.semanticParser.parse(parserInput, ontologyContext);
 
           if (parseResult.meta.skipped) {
@@ -1251,6 +1327,8 @@ Users can use these commands:
         toolName: toolCall.name,
         command: (toolArgs as { command?: string }).command,
         args: toolArgs,
+        channelType: context.channelType,
+        senderId: context.senderId,
       });
       this.trackGuardianSession(toolCall.id, context.sessionId);
       approved = await this.waitForGuardianApproval(toolCall.id, 60000);
@@ -3148,6 +3226,7 @@ Users can use these commands:
           this.providerConfig.defaultModel = modelArg;
         }
         this.config.model = modelArg;
+        await this.checkParserModel();
 
         // Persist through the config writer, which parses JSON5 properly and
         // validates before writing. Never hand-rewrite the config file.

@@ -229,9 +229,13 @@ export class MemoryRetractTool implements ToolDefinition {
                  ${consolidated}
                  ${objectFilter}
                  ?cp ?co .
-          OPTIONAL { ?claim claim:hasEvidence ?evidence . }
+          # One OPTIONAL: ?evidence stays bound to this claim's own evidence, so a
+          # claim without a hasEvidence link cannot match the whole evidence graph.
+          OPTIONAL {
+            ?claim claim:hasEvidence ?evidence .
+            GRAPH ${evidenceGraphIri} { ?evidence ?ep ?eo . }
+          }
         }
-        OPTIONAL { GRAPH ${evidenceGraphIri} { ?evidence ?ep ?eo . } }
       }`;
 
     await this.triplestore.update(deleteTriple);

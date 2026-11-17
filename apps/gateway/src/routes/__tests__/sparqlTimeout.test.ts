@@ -9,6 +9,7 @@ import {
   InProcessQueryExecutor, DiskQueryExecutor,
 } from '@ontofelia/semantic-memory';
 import { InMemoryAdapter } from '@ontofelia/semantic-memory';
+import type { QueryExecutor } from '@ontofelia/semantic-memory';
 import memoryRoutes from '../memory.js';
 import type { GatewayContext } from '../../context.js';
 
@@ -31,7 +32,14 @@ async function makeStore(dataDir: string): Promise<OxigraphAdapter> {
   return store;
 }
 
-describe('POST /api/knowledge/sparql with a worker deadline', () => {
+// Tests that do not exercise the deadline run under this generous one, so a slow
+// runner (cold worker, CPU contention) cannot turn a cheap query into a 504.
+const GENEROUS_DEADLINE_MS = 30000;
+// Vitest's default 5 s test and 10 s hook limits are wall-clock too: a first query spawns a
+// worker and loads its replica, which takes seconds on a throttled runner.
+const SLOW_RUNNER_TIMEOUT_MS = 60000;
+
+describe('POST /api/knowledge/sparql through the worker executor', { timeout: SLOW_RUNNER_TIMEOUT_MS }, () => {
   let app: FastifyInstance;
   let store: OxigraphAdapter;
   let dataDir: string;
@@ -42,13 +50,12 @@ describe('POST /api/knowledge/sparql with a worker deadline', () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparql-timeout-'));
     store = await makeStore(dataDir);
     app = Fastify();
-    app.get('/ping', async () => ({ ok: true }));
     await app.register(memoryRoutes, {
       triplestore: store,
-      config: { memory: { sparqlTimeoutMs: DEADLINE_MS } },
+      config: { memory: { sparqlTimeoutMs: GENEROUS_DEADLINE_MS } },
     } as unknown as GatewayContext);
     await app.ready();
-  });
+  }, SLOW_RUNNER_TIMEOUT_MS);
 
   afterAll(async () => {
     await app.close();
@@ -82,10 +89,46 @@ describe('POST /api/knowledge/sparql with a worker deadline', () => {
     expect(viaRoute.bindings).toEqual(JSON.parse(JSON.stringify(direct.bindings)));
   });
 
-  it('returns 504 at the deadline, keeps the event loop free, and recovers', async () => {
-    // Warm the worker so the measurement excludes spawn and replica load.
-    expect((await post(CHEAP)).statusCode).toBe(200);
+  it('sees data written through the adapter after an earlier query', async () => {
+    const q = `SELECT ?o WHERE { GRAPH <${GRAPH}> { <${EX}fresh> <${EX}p> ?o } }`;
+    expect((await post(q)).json().bindings).toEqual([]);
+    await store.insertTriples(GRAPH, [{ subject: EX + 'fresh', predicate: EX + 'p', object: EX + 'v' }]);
+    expect((await post(q)).json().bindings).toEqual([{ o: { type: 'uri', value: EX + 'v' } }]);
+  });
+});
 
+describe('POST /api/knowledge/sparql with a worker deadline', { timeout: SLOW_RUNNER_TIMEOUT_MS }, () => {
+  let app: FastifyInstance;
+  let store: OxigraphAdapter;
+  let exec: QueryExecutor;
+  let dataDir: string;
+
+  const post = (query: string) => app.inject({ method: 'POST', url: '/api/knowledge/sparql', payload: { query } });
+
+  beforeAll(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparql-timeout-'));
+    store = await makeStore(dataDir);
+    exec = createQueryExecutor(store);
+    // Spawn the worker and run one query outside the deadline: spawn, replica load and
+    // the first query on a fresh worker are not what this describe measures.
+    await exec.execute(CHEAP, GENEROUS_DEADLINE_MS);
+    app = Fastify();
+    app.get('/ping', async () => ({ ok: true }));
+    await app.register(memoryRoutes, {
+      triplestore: store,
+      sparqlExecutor: exec, // an injected executor is not closed by the route
+      config: { memory: { sparqlTimeoutMs: DEADLINE_MS } },
+    } as unknown as GatewayContext);
+    await app.ready();
+  }, SLOW_RUNNER_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await app.close();
+    await exec.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('returns 504 at the deadline, keeps the event loop free, and recovers', async () => {
     let maxGap = 0;
     let last = Date.now();
     const ticker = setInterval(() => {
@@ -96,37 +139,37 @@ describe('POST /api/knowledge/sparql with a worker deadline', () => {
 
     const started = Date.now();
     const slow = post(SLOW);
+    // The ping is due 50 ms in; its lag is measured from that due time, so a blocked
+    // main thread shows up as lag even though the timer itself fires late.
+    const pingDue = Date.now() + 50;
     await new Promise((r) => setTimeout(r, 50));
-    const pingStarted = Date.now();
     const ping = await app.inject({ method: 'GET', url: '/ping' });
-    const pingMs = Date.now() - pingStarted;
+    const pingMs = Date.now() - pingDue;
     const res = await slow;
     const elapsed = Date.now() - started;
     clearInterval(ticker);
 
     expect(res.statusCode).toBe(504);
     expect(res.json()).toEqual({ error: `Query exceeded the time limit of ${DEADLINE_MS} ms` });
-    expect(elapsed).toBeLessThan(DEADLINE_MS * 2);
+    // Uncancelled, SLOW takes about 16 s in the plain store; 3 s still proves the worker was killed.
+    expect(elapsed).toBeLessThan(3000);
     expect(ping.statusCode).toBe(200);
-    expect(pingMs).toBeLessThan(100);
-    expect(maxGap).toBeLessThan(100);
+    // The same query on the main thread blocks it for 2.4 to 5 s; 1 s is below that and above the gaps seen on a throttled runner (up to 0.8 s at 10 % CPU).
+    expect(pingMs).toBeLessThan(1000);
+    expect(maxGap).toBeLessThan(1000); // same base and reason as the ping lag
     console.log(`timeout latency ${elapsed} ms (deadline ${DEADLINE_MS}), ping ${pingMs} ms, max timer gap ${maxGap} ms`);
 
-    // A fresh worker serves the next query.
+    // The terminate dropped the worker. Prove through the executor, with a long
+    // deadline, that a fresh one answers; then through the route.
+    const direct = await exec.execute(CHEAP, GENEROUS_DEADLINE_MS);
+    expect(direct.type === 'bindings' && direct.bindings).toHaveLength(1);
     const after = await post(CHEAP);
     expect(after.statusCode).toBe(200);
     expect(after.json().bindings).toHaveLength(1);
   });
-
-  it('sees data written through the adapter after an earlier query', async () => {
-    const q = `SELECT ?o WHERE { GRAPH <${GRAPH}> { <${EX}fresh> <${EX}p> ?o } }`;
-    expect((await post(q)).json().bindings).toEqual([]);
-    await store.insertTriples(GRAPH, [{ subject: EX + 'fresh', predicate: EX + 'p', object: EX + 'v' }]);
-    expect((await post(q)).json().bindings).toEqual([{ o: { type: 'uri', value: EX + 'v' } }]);
-  });
 });
 
-describe('OxigraphQueryExecutor', () => {
+describe('OxigraphQueryExecutor', { timeout: SLOW_RUNNER_TIMEOUT_MS }, () => {
   it('treats a missing data file as an empty replica', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparql-exec-'));
     const exec = new OxigraphQueryExecutor(path.join(dir, 'dataset.nq'));

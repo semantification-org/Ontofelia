@@ -10,17 +10,22 @@
  * `core:sourceUri` starts with `vault://`; only the vault importer writes such
  * evidence (no agent tool can set a sourceUri). The claim's `sourceKind` is
  * deliberately NOT a criterion: the model can choose it (`memory_store`).
+ * Labels (`rdfs:label`) follow the same rule: a label is taken from an
+ * allow-listed claim, or from a worldview triple whose subject is exactly the
+ * IRI the engine mints from that label. Such a label carries no information
+ * beyond the IRI itself, which the export shows anyway via the displayName
+ * fallback; any other label needs a vault-backed claim. The schema and
+ * ontology graphs are not read at all.
  * Only the claims graph, the evidence graph (matched by sourceUri prefix; its
- * text is never read), the worldview and the label sources (worldview, schema,
- * shared ontology) are read, each by explicit IRI. User, self, session,
+ * text is never read) and the worldview are read, each by explicit IRI. User, self, session,
  * inferred and cog graphs are never read. Evidence text, raw text and source
  * spans are never exported.
  */
 import { constants as fsc, promises as fs } from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import type { KnowledgeEngine } from '../KnowledgeEngine.js';
-import { GraphUriResolver, SHARED_GRAPHS } from '../utils/GraphUriResolver.js';
+import { mintedEntityUri, type KnowledgeEngine } from '../KnowledgeEngine.js';
+import { GraphUriResolver } from '../utils/GraphUriResolver.js';
 import { sparqlIri } from '../utils/SparqlSyntax.js';
 import { isReferenceString, isWikiLinkSafe } from '../ingestion/VaultNoteMapper.js';
 
@@ -106,8 +111,6 @@ export async function buildVaultExport(engine: KnowledgeEngine, opts: VaultExpor
   const claimsG = sparqlIri(GraphUriResolver.getClaimsGraph(opts.agentId));
   const worldG = sparqlIri(GraphUriResolver.getWorldviewGraph(opts.agentId));
   const evidenceG = sparqlIri(GraphUriResolver.getEvidenceGraph(opts.agentId));
-  const schemaG = sparqlIri(GraphUriResolver.getSchemaGraph(opts.agentId));
-  const ontoG = sparqlIri(SHARED_GRAPHS.ONTOLOGY);
 
   // 1. The allow-list: the only source of exported facts.
   const allowSparql = `SELECT DISTINCT ?c ?s ?p ?o WHERE {
@@ -147,20 +150,24 @@ WHERE {
 }`);
   const withVault = new Set(vaultRows.map(r => r.c.value));
 
-  // 3. Labels, read-only, from explicitly named graphs.
-  const labelSparql = `SELECT ?e ?l WHERE {
-  { GRAPH ${worldG} { ?e <${RDFS_LABEL}> ?l } }
-  UNION { GRAPH ${schemaG} { ?e <${RDFS_LABEL}> ?l } }
-  UNION { GRAPH ${ontoG} { ?e <${RDFS_LABEL}> ?l } }
-}`;
-  const labelRows = await engine.selectExplicitGraphs(labelSparql);
-
+  // 3. Labels: from the allow-list rows, so a label stands on the same
+  // accepted, vault-backed claim as any other fact, or (worldview only) a
+  // label that merely restates the IRI minted from it.
   const labels = new Map<string, string[]>();
-  for (const r of labelRows) {
+  const addLabel = (iri: string, l: string): void => {
+    const arr = labels.get(iri) ?? [];
+    arr.push(l);
+    labels.set(iri, arr);
+  };
+  for (const r of allowRows) {
+    if (r.p.value !== RDFS_LABEL || r.s.type !== 'uri' || r.o.type === 'uri') continue;
+    addLabel(r.s.value, r.o.value);
+  }
+  const worldLabelRows = await engine.selectExplicitGraphs(
+    `SELECT ?e ?l WHERE { GRAPH ${worldG} { ?e <${RDFS_LABEL}> ?l } }`);
+  for (const r of worldLabelRows) {
     if (r.e.type !== 'uri' || r.l.type === 'uri') continue;
-    const arr = labels.get(r.e.value) ?? [];
-    arr.push(r.l.value);
-    labels.set(r.e.value, arr);
+    if (r.e.value === mintedEntityUri(r.l.value)) addLabel(r.e.value, r.l.value);
   }
   const labelOf = (iri: string): string => {
     const ls = (labels.get(iri) ?? []).filter(l => l.trim()).sort(cmp);

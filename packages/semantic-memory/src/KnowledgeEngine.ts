@@ -12,6 +12,11 @@ import { FactInput, FactContext, FactPreview, StoreResult } from './types.js';
 
 const ENTITY_NS = 'urn:ontofelia:entity:';
 
+/** The entity IRI the engine mints from a plain (non-IRI) name. */
+export function mintedEntityUri(name: string): string {
+  return `${ENTITY_NS}${encodeURIComponent(name.trim().replace(/\s+/g, '_'))}`;
+}
+
 /** The canonical entity node of a user (the subject of facts about them), by the id of their user graph. */
 export function userEntityUri(userId: string): string {
   return `${ENTITY_NS}user:${encodeURIComponent(userId)}`;
@@ -416,8 +421,7 @@ export class KnowledgeEngine {
       assertSafeUri(name);
       return name;
     }
-    const normalized = encodeURIComponent(name.trim().replace(/\s+/g, '_'));
-    return `${ENTITY_NS}${normalized}`;
+    return mintedEntityUri(name);
   }
 
   /**

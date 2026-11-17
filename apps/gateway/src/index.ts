@@ -234,7 +234,8 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
     // Lazy: the telegram adapter may connect after this point; resolve at send.
     channel: () => channelRegistry.get('telegram') as NotificationChannelPort | undefined,
     // Owner-target resolution order: notifications.target ?? telegram.ownerChatId
-    // ?? the SOLE telegram allowlist entry. We deliberately do NOT fall back to
+    // ?? telegram.ownerId ?? the SOLE telegram allowlist entry (only when no
+    // ownerId is set). We deliberately do NOT fall back to
     // allowlist[0] when several users are allowlisted (M4) — that could
     // misdeliver private owner updates. When no target can be trusted, suppress
     // (reason 'no-target') and warn once that an explicit target is required.
@@ -242,6 +243,7 @@ export async function startGateway(config: OntofeliaConfig): Promise<FastifyInst
       const res = resolveOwnerTarget({
         configuredTarget: config.notifications.target,
         ownerChatId: config.channels.telegram?.ownerChatId,
+        ownerId: config.channels.telegram?.ownerId,
         allowlistSenderIds: (await allowlistStore.list('telegram')).map((e) => e.senderId),
       });
       if (!res.target && !warnedNoOwnerTarget) {

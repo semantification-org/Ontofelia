@@ -105,6 +105,24 @@ describe('Guardian Approval Flow End-to-End', () => {
     expect(res.text).toContain('executed_dangerous');
   });
 
+  it('guardian_confirm event carries the channel and sender of the handled envelope', async () => {
+    const runtime = new AgentRuntime('test', mockConfig, new ExecProvider(), sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry);
+
+    let data: { callId?: string; channelType?: string; senderId?: string } | undefined;
+
+    runtime.onDebug((event) => {
+      if (event.phase === 'guardian_confirm' && event.data && (event.data as { callId?: string }).callId) {
+        data = event.data as typeof data;
+        setTimeout(() => runtime.resolveGuardianApproval(data!.callId!, true), 0);
+      }
+    });
+
+    await runtime.handleMessage(createEnv('do something'));
+
+    expect(data?.channelType).toBe('webchat');
+    expect(data?.senderId).toBe('u1');
+  });
+
   it('Deny path: does not execute tool after denial', async () => {
     const runtime = new AgentRuntime('test', mockConfig, new ExecProvider(), sessionStore, toolRegistry, toolPolicy, auditLog, skillRegistry, skillExecutor, pluginRegistry);
     

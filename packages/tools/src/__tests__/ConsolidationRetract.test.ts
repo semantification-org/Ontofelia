@@ -97,11 +97,18 @@ describe('memory_retract cascade into the consolidation copy', () => {
     expect((await promoteFor('anna')).promoted).toBe(1);
     expect((await promoteFor('bob')).promoted).toBe(1);
     expect(await holds(userGraph('bob'))).toBe(true);
+    const [bobCopy] = await consolidationClaims(userGraph('bob'));
+    const bobEvidenceTriples = async () =>
+      (await store.query(`SELECT ?e ?p ?o WHERE { GRAPH <${CLAIMS}> { <${bobCopy}> <${CORE}hasEvidence> ?e }
+        GRAPH <${EVIDENCE}> { ?e ?p ?o } }`)).bindings ?? [];
+    const evidenceBefore = (await bobEvidenceTriples()).length;
+    expect(evidenceBefore).toBeGreaterThan(0);
 
     await retract.execute({ subject: S, predicate: P, object: O }, ctx('anna'));
     expect(await holds(userGraph('anna'))).toBe(false);
     expect(await holds(userGraph('bob'))).toBe(true);
     expect((await consolidationClaims(userGraph('bob'))).length).toBe(1);
+    expect((await bobEvidenceTriples()).length).toBe(evidenceBefore);
   });
 
   it('the ledger still prevents a re-promotion after the retraction', async () => {
